@@ -51,6 +51,47 @@ def iter_audio_windows(mono: np.ndarray, sample_rate: int, window_sec: float) ->
         yield window.astype(np.float32)
 
 
+def _pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{max(0.0, min(1.0, float(value))) * 100:.0f}%"
+
+
+def _num(value: float | None, digits: int = 1) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.{digits}f}"
+
+
+def format_detection_log(prefix: str, event: AcousticEvent) -> str:
+    metadata = event.metadata or {}
+    operator_label = event.operator_label or metadata.get("operator_label") or "background"
+    harmonic_smoothed = event.harmonic_score_smoothed
+    if harmonic_smoothed is None:
+        harmonic_smoothed = metadata.get("harmonic_score_smoothed")
+    harmonic_raw_pct = metadata.get("harmonic_evidence_pct_raw")
+    if harmonic_raw_pct is None:
+        harmonic_raw_pct = event.harmonic_evidence_pct
+    harmonic_smoothed_pct = event.harmonic_evidence_pct_smoothed
+    if harmonic_smoothed_pct is None:
+        harmonic_smoothed_pct = metadata.get("harmonic_evidence_pct_smoothed")
+    combined = event.combined_drone_evidence_pct
+    if combined is None:
+        combined = metadata.get("combined_drone_evidence_pct")
+    canonical_f0 = event.canonical_best_f0_hz or metadata.get("canonical_best_f0_hz")
+    f0_family_stable = event.f0_family_stable
+    if f0_family_stable is None:
+        f0_family_stable = metadata.get("f0_family_stable")
+    reason = event.decision_reason or metadata.get("decision_reason") or ""
+    return (
+        f"{prefix} {event.status} label={operator_label} hf={_num(event.hf_p_drone, 3)} "
+        f"harm={_num(event.harmonic_score)}/{_num(harmonic_smoothed)} "
+        f"h={_pct(harmonic_raw_pct)}/{_pct(harmonic_smoothed_pct)} "
+        f"combined={_pct(combined)} f0={event.best_f0_hz} canon={canonical_f0} "
+        f"stable={bool(f0_family_stable)} reason=\"{reason}\""
+    )
+
+
 def resample_mono(mono: np.ndarray, source_sr: int, target_sr: int) -> np.ndarray:
     mono = np.asarray(mono, dtype=np.float32).reshape(-1)
     source_sr = int(source_sr)
@@ -466,10 +507,13 @@ def run(args: argparse.Namespace) -> None:
                 requests.post(heartbeat_url, json=heartbeat.model_dump(mode="json"), timeout=2.0)
                 last_heartbeat = loop_start
             print(
-                f"{dataset_idx} {label} {event.status:11s} "
-                f"hf_p={event.hf_p_drone} harm={event.harmonic_score:.1f} "
-                f"f0={event.best_f0_hz} dist={distance_display} "
-                f"throttle={file_metadata.get('throttle')} drone={file_metadata.get('drone_id')}"
+                format_detection_log(
+                    (
+                        f"{dataset_idx} {label} dist={distance_display} "
+                        f"throttle={file_metadata.get('throttle')} drone={file_metadata.get('drone_id')}"
+                    ),
+                    event,
+                )
             )
             windows_sent += 1
             if args.realtime:

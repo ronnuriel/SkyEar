@@ -4,6 +4,7 @@ station:
   latitude: 32.0853
   longitude: 34.7818
   altitude_m: 20.0
+  coverage_radius_m: 250.0
 
 audio:
   device_id: 3

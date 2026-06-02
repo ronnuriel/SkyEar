@@ -81,6 +81,17 @@ class StationHeartbeat(BaseModel):
     errors: list[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+class TrackSummary(BaseModel):
+    track_id: str
+    station_ids: list[str] = Field(default_factory=list)
+    events: list[AcousticEvent] = Field(default_factory=list)
+    level: int = Field(ge=0, le=3)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str
+    estimated_source: Optional[Dict[str, Any]] = None
+    interpretation: str
+    same_f0: bool = False
+
 class FusedAlert(BaseModel):
     timestamp_unix: float
     level: int = Field(ge=0, le=3)
@@ -88,5 +99,7 @@ class FusedAlert(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
     interpretation: Optional[str] = None
+    global_level: Optional[int] = None
+    tracks: list[TrackSummary] = Field(default_factory=list)
     events_used: list[AcousticEvent] = Field(default_factory=list)
     estimated_location: Optional[GeoPoint] = None

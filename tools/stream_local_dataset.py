@@ -15,7 +15,7 @@ from station.audio_capture import to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.hf_detector import DEFAULT_MODEL_ID, HFDetector
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
-from tools.stream_hf_dataset import iter_audio_windows, mono_to_simulated_channels, resample_mono
+from tools.stream_hf_dataset import format_detection_log, iter_audio_windows, mono_to_simulated_channels, resample_mono
 
 
 DETECTOR_VERSION = "local-distance-dataset-stream-v1"
@@ -44,13 +44,13 @@ def infer_path_metadata(path: Path, root: Path | None = None) -> dict[str, Any]:
 
     for part in parts:
         if "close" in part:
-            metadata["distance_category"] = "Close"
+            metadata["distance_category"] = "close"
             break
         if "medium" in part:
-            metadata["distance_category"] = "Medium"
+            metadata["distance_category"] = "medium"
             break
         if "distant" in part or "far" in part:
-            metadata["distance_category"] = "Distant"
+            metadata["distance_category"] = "distant"
             break
 
     joined = "/".join(parts)
@@ -68,6 +68,32 @@ def metadata_matches(metadata: dict[str, Any], label_filter: str | None, distanc
     if distance_filter and distance_filter.lower() != str(metadata.get("distance_category", "")).lower():
         return False
     return True
+
+
+def iter_audio_windows_with_padding(
+    mono: np.ndarray,
+    sample_rate: int,
+    window_sec: float,
+    skip_tail_padding: bool = True,
+) -> Iterator[tuple[np.ndarray, float]]:
+    mono = np.asarray(mono, dtype=np.float32).reshape(-1)
+    window_samples = max(1, int(round(float(sample_rate) * float(window_sec))))
+    for start in range(0, mono.size, window_samples):
+        actual = min(window_samples, mono.size - start)
+        padding_ratio = 1.0 - (actual / window_samples)
+        if skip_tail_padding and padding_ratio > 0.20:
+            continue
+        window = mono[start : start + window_samples]
+        if window.size < window_samples:
+            window = np.pad(window, (0, window_samples - window.size))
+        yield window.astype(np.float32), float(padding_ratio)
+
+
+def _window_rms(mono: np.ndarray) -> float:
+    if mono.size == 0:
+        return 0.0
+    audio64 = np.asarray(mono, dtype=np.float64)
+    return float(np.sqrt(np.mean(audio64 * audio64)))
 
 
 def _to_mono_float32(audio: np.ndarray) -> np.ndarray:
@@ -218,6 +244,48 @@ def build_event(
     )
 
 
+def apply_local_eval_guards(event: AcousticEvent) -> AcousticEvent:
+    metadata = dict(event.metadata or {})
+    harmonic = float(metadata.get("harmonic_evidence_pct_smoothed") or event.harmonic_evidence_pct or 0.0)
+    raw_harmonic = float(metadata.get("harmonic_evidence_pct_raw") or event.harmonic_evidence_pct or 0.0)
+    combined = float(event.combined_drone_evidence_pct or metadata.get("combined_drone_evidence_pct") or 0.0)
+    ml = event.ml_drone_pct
+    if ml is None:
+        ml = metadata.get("ml_drone_pct")
+    ml = None if ml is None else float(ml)
+    hf_negative = event.hf_p_drone is not None and float(event.hf_p_drone) < 0.20
+    status = event.status.value if hasattr(event.status, "value") else str(event.status)
+    operator_label = event.operator_label or metadata.get("operator_label") or "background"
+
+    if hf_negative and combined < 0.30 and status in {"alert", "drone_like"}:
+        if max(harmonic, raw_harmonic) >= 0.45:
+            status = "suspect"
+            operator_label = "non_drone_harmonic"
+            reason = "harmonic source detected, but ML strongly rejects drone"
+        else:
+            status = "background"
+            operator_label = "background"
+            reason = "ML strongly rejects drone and current combined evidence is weak"
+        event.status = EventStatus(status)
+        event.operator_label = operator_label
+        event.decision_reason = reason
+        metadata["operator_label"] = operator_label
+        metadata["decision_reason"] = reason
+
+    label_allowed = (
+        (ml is not None and ml >= 0.90 and combined >= 0.45)
+        or status == "alert"
+        or int(event.channel_agreement_count or 0) >= 2
+    )
+    if operator_label == "drone_like" and not label_allowed:
+        operator_label = "ml_drone_candidate" if ml is not None and ml >= 0.90 else "background"
+        event.operator_label = operator_label
+        metadata["operator_label"] = operator_label
+
+    event.metadata = metadata
+    return event
+
+
 def _report_rows(events: list[AcousticEvent]) -> Iterator[dict[str, Any]]:
     for event in events:
         metadata = event.metadata
@@ -272,6 +340,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--distance-filter")
     parser.add_argument("--hf", action="store_true")
     parser.add_argument("--realtime", action="store_true")
+    parser.add_argument("--no-post", action="store_true", help="Build and print events without posting them to the server.")
+    parser.add_argument("--reset-state-per-file", dest="reset_state_per_file", action="store_true", default=True)
+    parser.add_argument("--no-reset-state-per-file", dest="reset_state_per_file", action="store_false")
+    parser.add_argument("--skip-tail-padding", dest="skip_tail_padding", action="store_true", default=True)
+    parser.add_argument("--keep-tail-padding", dest="skip_tail_padding", action="store_false")
+    parser.add_argument("--min-rms", type=float, default=0.0)
+    parser.add_argument("--eval-mode", action="store_true")
     parser.add_argument("--save-report", type=Path)
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     return parser.parse_args()
@@ -279,6 +354,9 @@ def parse_args() -> argparse.Namespace:
 
 def run(args: argparse.Namespace) -> None:
     root = Path(args.root)
+    if args.eval_mode:
+        args.reset_state_per_file = True
+        args.skip_tail_padding = True
     detector_state = detector_state_from_args(args)
     hf_detector = HFDetector(model_id=args.model_id) if args.hf else None
     last_hf_result = None
@@ -295,15 +373,26 @@ def run(args: argparse.Namespace) -> None:
 
         mono, source_sr = read_audio_mono(path)
         mono = resample_mono(mono, source_sr, int(args.sample_rate))
+        if args.reset_state_per_file:
+            detector_state = detector_state_from_args(args)
+            last_hf_result = None
         files_seen += 1
 
-        for window in iter_audio_windows(mono, int(args.sample_rate), float(args.window_sec)):
+        for window, padding_ratio in iter_audio_windows_with_padding(
+            mono,
+            int(args.sample_rate),
+            float(args.window_sec),
+            bool(args.skip_tail_padding),
+        ):
             if args.max_windows is not None and windows_sent >= int(args.max_windows):
                 if args.save_report:
                     write_report(args.save_report, events)
                 return
 
             loop_start = time.time()
+            window_rms = _window_rms(window)
+            if float(args.min_rms or 0.0) > 0.0 and window_rms < float(args.min_rms):
+                continue
             audio = mono_to_simulated_channels(window, int(args.channels))
             if hf_detector is not None:
                 last_hf_result = hf_detector.predict(window, int(args.sample_rate))
@@ -321,13 +410,13 @@ def run(args: argparse.Namespace) -> None:
                 hf_result=last_hf_result,
                 hf_p_drone=hf_p_drone,
             )
-            requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
+            event.metadata["padding_ratio"] = padding_ratio
+            event.metadata["window_rms"] = window_rms
+            event = apply_local_eval_guards(event)
+            if not args.no_post:
+                requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
             events.append(event)
-            print(
-                f"{path.name} {metadata.get('label')} {metadata.get('distance_category')} {event.status:11s} "
-                f"hf_p={event.hf_p_drone} harm={event.harmonic_score:.1f} "
-                f"f0={event.best_f0_hz} stable={event.metadata.get('f0_stable')}"
-            )
+            print(format_detection_log(f"{path.name} {metadata.get('label')} {metadata.get('distance_category')}", event))
             windows_sent += 1
             if args.realtime:
                 time.sleep(max(0.0, float(args.window_sec) - (time.time() - loop_start)))

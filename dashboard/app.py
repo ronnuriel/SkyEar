@@ -100,6 +100,26 @@ def _render_station_card(
                 plt.close(fig)
 
 
+def _draw_track_card(track: dict):
+    level = int(track.get("level", 0))
+    title = f"{track.get('track_id', 'track')} - LEVEL {level}"
+    with st.container(border=True):
+        if level >= 3:
+            st.error(title)
+        elif level == 2:
+            st.warning(title)
+        elif level == 1:
+            st.info(title)
+        else:
+            st.success(title)
+        st.caption(track.get("interpretation") or "track")
+        cols = st.columns(3)
+        cols[0].metric("Stations", ", ".join(track.get("station_ids") or []))
+        cols[1].metric("Confidence", f"{float(track.get('confidence') or 0.0):.2f}")
+        cols[2].metric("Same f0", "yes" if track.get("same_f0") else "no")
+        st.caption(track.get("reason") or "")
+
+
 st.set_page_config(page_title="SkyEar Operator Dashboard", layout="wide")
 st.title("SkyEar Operator Dashboard")
 st.caption("Passive acoustic warning network - tactical overview.")
@@ -133,6 +153,7 @@ try:
     confidence = float(fusion.get("confidence", 0.0))
     reason = fusion.get("reason", "")
     interpretation = fusion.get("interpretation") or "background"
+    tracks = fusion.get("tracks") or []
 
     if fusion_level >= 3:
         col1.error(f"LEVEL {fusion_level}")
@@ -145,7 +166,13 @@ try:
 
     col2.metric("Fusion confidence", f"{confidence:.2f}")
     col3.metric("Interpretation", interpretation)
-    st.caption(reason)
+    st.caption(f"{reason} | Active tracks: {len(tracks)}")
+    if tracks:
+        st.subheader("Active tracks")
+        track_cols = st.columns(min(3, len(tracks)))
+        for idx, track in enumerate(tracks):
+            with track_cols[idx % len(track_cols)]:
+                _draw_track_card(track)
 except Exception as e:
     st.error(f"Could not load fusion: {e}")
 

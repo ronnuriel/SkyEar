@@ -95,6 +95,7 @@ def main():
     stability_cfg = cfg.get("stability", {})
     hf_cfg = cfg.get("hf", {})
     heartbeat_cfg = cfg.get("heartbeat", {})
+    coverage_radius_m = station_cfg.get("coverage_radius_m")
 
     detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg))
     hf_detector = None
@@ -204,6 +205,7 @@ def main():
             metadata={
                 "sample_rate": audio_cfg["sample_rate"],
                 "channels": audio_cfg["channels"],
+                "coverage_radius_m": None if coverage_radius_m is None else float(coverage_radius_m),
                 "mic_profile": mic_cfg.get("profile"),
                 "mic_sync_mode": mic_cfg.get("sync_mode"),
                 "suspect_threshold": frame.suspect_threshold,
