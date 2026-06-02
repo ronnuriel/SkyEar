@@ -7,9 +7,10 @@ import requests
 import yaml
 
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
-from station.audio_capture import audio_blocks, list_input_devices
+from station.audio_capture import audio_blocks, list_input_devices, to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
+from station.spectrum import compute_harmonic_lines, compute_spectrum_summary
 
 DETECTOR_VERSION = "station-detector-state-v1"
 
@@ -71,6 +72,16 @@ def main():
     ):
         now = time.time()
         frame = detector_state.update(audio, int(audio_cfg["sample_rate"]), now)
+        mono = to_mono(audio)
+        spectrum = compute_spectrum_summary(
+            mono,
+            int(audio_cfg["sample_rate"]),
+            max_freq=int(det_cfg.get("max_freq", 7000)),
+        )
+        harmonic_lines = compute_harmonic_lines(
+            frame.best_f0_hz,
+            int(spectrum["spectrum_max_freq_hz"]),
+        )
 
         azimuth, direction_confidence = None, None
         if direction_allowed and audio.ndim == 2 and audio.shape[1] >= 3:
@@ -113,6 +124,8 @@ def main():
                 "mic_sync_mode": mic_cfg.get("sync_mode"),
                 "suspect_threshold": frame.suspect_threshold,
                 "alert_threshold": frame.alert_threshold,
+                **spectrum,
+                "harmonic_lines": harmonic_lines,
             },
         )
 

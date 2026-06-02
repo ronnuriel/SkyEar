@@ -23,9 +23,9 @@ detector:
   clear_after_sec: 2.5
 
 mic_array:
-  profile: iphone_stereo_untrusted
-  sync_mode: unsynchronized
-  channel_mode: voting
+  profile: mac_builtin_mono
+  sync_mode: mono
+  channel_mode: mono
 
 direction:
   enabled: false

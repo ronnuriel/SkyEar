@@ -1,6 +1,10 @@
-import requests
+import time
+
+import matplotlib.pyplot as plt
 import pandas as pd
+import requests
 import streamlit as st
+
 from dashboard.map_view import show_station_table
 
 st.set_page_config(page_title="Drone Acoustic Network Dashboard", layout="wide")
@@ -9,6 +13,14 @@ st.caption("Passive acoustic warning network — operator dashboard.")
 
 server_url = st.sidebar.text_input("Server URL", value="http://127.0.0.1:8080")
 st.sidebar.button("Refresh")
+auto_refresh = st.sidebar.checkbox("Auto refresh", value=True)
+refresh_sec = st.sidebar.number_input(
+    "Refresh every seconds",
+    min_value=0.5,
+    max_value=10.0,
+    value=1.5,
+    step=0.5,
+)
 
 try:
     st.sidebar.success(requests.get(f"{server_url}/health", timeout=1.5).json())
@@ -42,6 +54,39 @@ try:
     show_station_table(events)
     if events:
         latest = events[-1]
+        metadata = latest.get("metadata", {})
+        spectrum_freqs = metadata.get("spectrum_freqs_hz") or []
+        spectrum_db = metadata.get("spectrum_db") or []
+        harmonic_lines = metadata.get("harmonic_lines") or []
+
+        st.subheader("Live spectrum")
+        if spectrum_freqs and spectrum_db:
+            metric_cols = st.columns(5)
+            metric_cols[0].metric("Station", latest.get("station_id", "unknown"))
+            metric_cols[1].metric("Status", latest.get("status", "unknown"))
+            metric_cols[2].metric("Harmonic score", f"{float(latest.get('harmonic_score') or 0.0):.1f}")
+            metric_cols[3].metric("Best f0", latest.get("best_f0_hz") or "none")
+            metric_cols[4].metric("Confidence", f"{float(latest.get('confidence') or 0.0):.2f}")
+
+            fig, ax = plt.subplots(figsize=(10, 3.5))
+            ax.plot(spectrum_freqs, spectrum_db, linewidth=1.2)
+            for line in harmonic_lines:
+                freq = line.get("freq_hz")
+                if freq is None:
+                    continue
+                ax.axvline(float(freq), linestyle="--", linewidth=0.9, alpha=0.5)
+            ax.set_xlabel("Frequency (Hz)")
+            ax.set_ylabel("Relative level (dB)")
+            ax.set_ylim(-90, 3)
+            ax.grid(True, alpha=0.25)
+            st.pyplot(fig)
+            plt.close(fig)
+
+            if harmonic_lines:
+                st.dataframe(pd.DataFrame(harmonic_lines), width="stretch")
+        else:
+            st.warning("No live spectrum metadata yet. Start updated station_agent.")
+
         channel_evidence = latest.get("channel_evidence") or []
         if channel_evidence:
             st.subheader("Latest per-channel evidence")
@@ -59,3 +104,7 @@ try:
         st.info("No alerts yet.")
 except Exception as e:
     st.error(f"Could not load alerts: {e}")
+
+if auto_refresh:
+    time.sleep(float(refresh_sec))
+    st.rerun()
