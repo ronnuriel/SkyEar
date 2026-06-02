@@ -1,13 +1,12 @@
 station:
-  station_id: station_001
-  name: Home Mac Test Node1
+  station_id: station_002
+  name: Home Mac Test Node2
   latitude: 32.0853
   longitude: 34.7818
   altitude_m: 20.0
 
-
 audio:
-  device_id: 1
+  device_id: 2
   sample_rate: 44100
   channels: 1
   window_sec: 2.0

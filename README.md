@@ -24,6 +24,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## To Check
+
+```bash
+PYTHONPATH=. python -m station.station_agent --list-devices
+```
+
 Terminal 1:
 
 ```bash

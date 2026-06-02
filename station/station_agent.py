@@ -169,11 +169,17 @@ def main():
             },
         )
 
+        hf_label = last_hf_result.label if last_hf_result is not None else None
+        hf_error = bool(last_hf_result and last_hf_result.error)
+        hf_display = f"{hf_p_drone:.2f}" if hf_p_drone is not None else "None"
         print(
             f"{time.strftime('%H:%M:%S')} {event.status:11s} "
             f"conf={event.confidence:.2f} harm={event.harmonic_score:.1f} "
-            f"f0={event.best_f0_hz} rms={event.rms:.4f} dur={event.duration_sec:.1f} "
-            f"agree={event.channel_agreement_count} strong={event.strongest_channel} "
+            f"th={frame.suspect_threshold:.1f}/{frame.alert_threshold:.1f} "
+            f"f0={event.best_f0_hz} stable={frame.f0_stable} "
+            f"hf={hf_display} label={hf_label} hf_err={hf_error} "
+            f"rms={event.rms:.4f} dur={event.duration_sec:.1f} "
+            f"agree={event.channel_agreement_count}/{event.channel_count} "
             f"az={event.estimated_azimuth_deg}"
         )
 

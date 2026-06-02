@@ -56,6 +56,23 @@ def test_hf_detection_result_has_expected_fields():
     assert result.class_probs == {}
 
 
+@pytest.mark.parametrize(
+    ("id2label", "probs", "fallback_idx", "expected"),
+    [
+        ({0: "drone", 1: "not_drone"}, [0.2, 0.8], 1, 0.2),
+        ({0: "not_drone", 1: "drone"}, [0.9, 0.1], 1, 0.1),
+        ({0: "background", 1: "drone"}, [0.7, 0.3], 1, 0.3),
+        ({0: "LABEL_0", 1: "LABEL_1"}, [0.4, 0.6], 1, 0.6),
+    ],
+)
+def test_drone_probability_ignores_negative_drone_labels(id2label, probs, fallback_idx, expected):
+    detector = HFDetector("example/model", fallback_drone_label_idx=fallback_idx)
+
+    p_drone = detector._drone_probability(np.asarray(probs, dtype=np.float32), id2label)
+
+    assert p_drone == pytest.approx(expected)
+
+
 @pytest.mark.skipif(
     os.environ.get("SKYEAR_RUN_HF_TESTS") != "1",
     reason="Set SKYEAR_RUN_HF_TESTS=1 to download and run the Hugging Face model.",

@@ -8,6 +8,16 @@ from scipy.signal import resample_poly
 
 
 DEFAULT_MODEL_ID = "preszzz/drone-audio-detection-05-17-trial-0"
+NEGATIVE_DRONE_LABELS = {
+    "not_drone",
+    "no_drone",
+    "non_drone",
+    "not drone",
+    "no drone",
+    "non-drone",
+    "background",
+    "negative",
+}
 
 
 @dataclass
@@ -90,13 +100,23 @@ class HFDetector:
             return False
 
     def _drone_probability(self, probs: np.ndarray, id2label: dict) -> float:
-        drone_indices = [
-            idx
-            for idx, label in id2label.items()
-            if "drone" in str(label).lower() or "uav" in str(label).lower()
-        ]
+        drone_indices = []
+        usable_labels = False
+        for idx, label in id2label.items():
+            normalized = str(label).lower()
+            if not normalized:
+                continue
+            if normalized.startswith("label_"):
+                continue
+
+            usable_labels = True
+            if any(marker in normalized for marker in NEGATIVE_DRONE_LABELS):
+                continue
+            if normalized == "drone" or "uav" in normalized or "drone" in normalized:
+                drone_indices.append(idx)
+
         if drone_indices:
             return float(max(probs[int(idx)] for idx in drone_indices))
-        if 0 <= self.fallback_drone_label_idx < len(probs):
+        if not usable_labels and 0 <= self.fallback_drone_label_idx < len(probs):
             return float(probs[self.fallback_drone_label_idx])
         return 0.0
