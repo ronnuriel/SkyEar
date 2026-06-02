@@ -82,6 +82,7 @@ def test_signal_clears_to_background_after_clean_windows():
     state = _calibrated_state(clear_after_sec=2.5)
 
     state.update(_harmonic(), SR, 3.0)
+    state.update(_harmonic(), SR, 4.5)
     state.update(_harmonic(), SR, 6.1)
     holding = state.update(_quiet(), SR, 7.0)
     cleared = state.update(_quiet(), SR, 9.0)

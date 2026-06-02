@@ -19,6 +19,11 @@ class StationDetectorStateConfig:
     calibration_seconds: float = 8.0
     min_alert_duration_sec: float = 3.0
     clear_after_sec: float = 2.5
+    stability_enabled: bool = True
+    stability_history_windows: int = 4
+    stability_max_f0_std_hz: float = 80.0
+    stability_min_score_windows: int = 3
+    advisory_threshold: float = 0.70
 
 
 @dataclass
@@ -46,6 +51,7 @@ class StationDetectionFrame:
     channel_count: int = 1
     suspect_threshold: float = 14.0
     alert_threshold: float = 22.0
+    f0_stable: bool = False
 
 
 def _sigmoid_score(score: float, threshold: float) -> float:
@@ -79,6 +85,9 @@ class StationDetectorState:
         self._evidence_started_at: Optional[float] = None
         self._last_evidence_at: Optional[float] = None
         self._last_active_status: Optional[str] = None
+        self._best_f0_history: list[Optional[int]] = []
+        self._score_history: list[float] = []
+        self._status_history: list[str] = []
 
     def update(
         self,
@@ -132,12 +141,22 @@ class StationDetectorState:
 
         has_suspect_harmonic = evidence_score >= self.suspect_threshold
         has_alert_harmonic = evidence_score >= self.alert_threshold
+        self._record_history(best_f0, evidence_score)
+        f0_stable = self._f0_is_stable()
+        advisory_support = max(float(hf_p_drone or 0.0), float(cnn_p_drone or 0.0)) >= self.config.advisory_threshold
+        strong_channel_agreement = agreement_count >= 2
+        drone_like_ready = advisory_support or f0_stable or strong_channel_agreement
+        alert_ready = f0_stable or strong_channel_agreement
 
         status, duration = self._status_for_evidence(
             timestamp=timestamp,
             has_suspect_harmonic=has_suspect_harmonic,
             has_alert_harmonic=has_alert_harmonic,
+            drone_like_ready=drone_like_ready,
+            alert_ready=alert_ready,
         )
+        self._status_history.append(status)
+        self._trim_history(self._status_history)
         confidence = self._confidence(evidence_score, has_suspect_harmonic, hf_p_drone, cnn_p_drone, agreement_count)
 
         return self._frame(
@@ -152,6 +171,7 @@ class StationDetectorState:
             strongest_channel=strongest.channel_index if strongest is not None else None,
             agreement_count=agreement_count,
             channel_count=channels.shape[1],
+            f0_stable=f0_stable,
         )
 
     def _finish_calibration(self) -> None:
@@ -199,6 +219,8 @@ class StationDetectorState:
         timestamp: float,
         has_suspect_harmonic: bool,
         has_alert_harmonic: bool,
+        drone_like_ready: bool,
+        alert_ready: bool,
     ) -> tuple[str, float]:
         if has_suspect_harmonic:
             if self._evidence_started_at is None:
@@ -206,9 +228,9 @@ class StationDetectorState:
             self._last_evidence_at = timestamp
             duration = max(0.0, timestamp - self._evidence_started_at)
 
-            if has_alert_harmonic and duration >= self.config.min_alert_duration_sec:
+            if has_alert_harmonic and duration >= self.config.min_alert_duration_sec and alert_ready:
                 status = "alert"
-            elif has_alert_harmonic:
+            elif has_alert_harmonic and drone_like_ready:
                 status = "drone_like"
             else:
                 status = "suspect"
@@ -228,6 +250,28 @@ class StationDetectorState:
         self._last_evidence_at = None
         self._last_active_status = None
         return "background", 0.0
+
+    def _record_history(self, best_f0_hz: Optional[int], score: float) -> None:
+        self._best_f0_history.append(best_f0_hz)
+        self._score_history.append(float(score))
+        self._trim_history(self._best_f0_history)
+        self._trim_history(self._score_history)
+
+    def _trim_history(self, values: list) -> None:
+        max_items = max(1, int(self.config.stability_history_windows))
+        del values[:-max_items]
+
+    def _f0_is_stable(self) -> bool:
+        if not self.config.stability_enabled:
+            return True
+        usable = [
+            f0
+            for f0, score in zip(self._best_f0_history, self._score_history)
+            if f0 is not None and score >= self.suspect_threshold
+        ]
+        if len(usable) < self.config.stability_min_score_windows:
+            return False
+        return float(np.std(np.asarray(usable, dtype=np.float64))) <= self.config.stability_max_f0_std_hz
 
     def _confidence(
         self,
@@ -258,6 +302,7 @@ class StationDetectorState:
         channel_count: int,
         strongest_channel: Optional[int] = None,
         agreement_count: int = 0,
+        f0_stable: bool = False,
     ) -> StationDetectionFrame:
         return StationDetectionFrame(
             status=status,
@@ -274,4 +319,5 @@ class StationDetectorState:
             channel_count=int(channel_count),
             suspect_threshold=self.suspect_threshold,
             alert_threshold=self.alert_threshold,
+            f0_stable=bool(f0_stable),
         )

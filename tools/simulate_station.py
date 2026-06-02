@@ -114,6 +114,7 @@ def build_event(
     sample_rate: int,
     timestamp: float,
     max_freq: int = 7000,
+    metadata_extra: dict | None = None,
 ) -> AcousticEvent:
     frame = station.detector_state.update(audio, sample_rate, timestamp)
     mono = to_mono(audio)
@@ -127,6 +128,7 @@ def build_event(
     )
     harmonic_lines = compute_harmonic_lines(frame.best_f0_hz, max_freq)
 
+    metadata_extra = metadata_extra or {}
     return AcousticEvent(
         station_id=station.station_id,
         station_name=f"Simulated Station {station.station_index + 1}",
@@ -153,9 +155,11 @@ def build_event(
             "mic_sync_mode": "unsynchronized",
             "suspect_threshold": frame.suspect_threshold,
             "alert_threshold": frame.alert_threshold,
+            "f0_stable": frame.f0_stable,
             **spectrum,
             **spectrogram,
             "harmonic_lines": harmonic_lines,
+            **metadata_extra,
         },
     )
 

@@ -10,6 +10,7 @@ from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
 from station.audio_capture import audio_blocks, list_input_devices, to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
+from station.hf_detector import HFDetector
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
 DETECTOR_VERSION = "station-detector-state-v1"
@@ -18,7 +19,9 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-def _detector_config(det_cfg: dict[str, Any]) -> StationDetectorStateConfig:
+def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | None = None, hf_cfg: dict[str, Any] | None = None) -> StationDetectorStateConfig:
+    stability_cfg = stability_cfg or {}
+    hf_cfg = hf_cfg or {}
     return StationDetectorStateConfig(
         f0_min=int(det_cfg.get("f0_min", 500)),
         f0_max=int(det_cfg.get("f0_max", 2200)),
@@ -29,6 +32,11 @@ def _detector_config(det_cfg: dict[str, Any]) -> StationDetectorStateConfig:
         calibration_seconds=float(det_cfg.get("calibration_seconds", 8.0)),
         min_alert_duration_sec=float(det_cfg.get("min_alert_duration_sec", det_cfg.get("min_duration_sec", 3.0))),
         clear_after_sec=float(det_cfg.get("clear_after_sec", 2.5)),
+        stability_enabled=bool(stability_cfg.get("enabled", True)),
+        stability_history_windows=int(stability_cfg.get("history_windows", 4)),
+        stability_max_f0_std_hz=float(stability_cfg.get("max_f0_std_hz", 80.0)),
+        stability_min_score_windows=int(stability_cfg.get("min_score_windows", 3)),
+        advisory_threshold=float(hf_cfg.get("threshold", 0.70)),
     )
 
 def _station_mode(audio: np.ndarray, direction_allowed: bool) -> str:
@@ -54,8 +62,20 @@ def main():
     station_cfg, audio_cfg = cfg["station"], cfg["audio"]
     det_cfg, dir_cfg, server_cfg = cfg["detector"], cfg["direction"], cfg["server"]
     mic_cfg = cfg.get("mic_array", {})
+    stability_cfg = cfg.get("stability", {})
+    hf_cfg = cfg.get("hf", {})
 
-    detector_state = StationDetectorState(_detector_config(det_cfg))
+    detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg))
+    hf_detector = None
+    if bool(hf_cfg.get("enabled", False)):
+        hf_detector = HFDetector(
+            model_id=str(hf_cfg.get("model_id")),
+            fallback_drone_label_idx=int(hf_cfg.get("fallback_drone_label_idx", 1)),
+            threshold=float(hf_cfg.get("threshold", 0.70)),
+        )
+    hf_run_every = max(1, int(hf_cfg.get("run_every_n_windows", 2)))
+    window_index = 0
+    last_hf_result = None
     last_send = 0.0
     direction_requested = bool(dir_cfg.get("enabled"))
     direction_allowed = direction_requested and mic_cfg.get("sync_mode") == "synchronized"
@@ -72,8 +92,12 @@ def main():
     ):
         now = time.time()
         sample_rate = int(audio_cfg["sample_rate"])
-        frame = detector_state.update(audio, sample_rate, now)
         mono = to_mono(audio)
+        if hf_detector is not None and window_index % hf_run_every == 0:
+            last_hf_result = hf_detector.predict(mono, sample_rate)
+        hf_p_drone = last_hf_result.p_drone if last_hf_result is not None else None
+        frame = detector_state.update(audio, sample_rate, now, hf_p_drone=hf_p_drone)
+        window_index += 1
         max_freq = int(det_cfg.get("max_freq", 7000))
         spectrum = compute_spectrum_summary(
             mono,
@@ -115,6 +139,7 @@ def main():
             confidence=frame.confidence,
             harmonic_score=frame.harmonic_score,
             best_f0_hz=frame.best_f0_hz,
+            hf_p_drone=hf_p_drone,
             estimated_azimuth_deg=azimuth,
             direction_confidence=direction_confidence,
             rms=frame.rms,
@@ -134,6 +159,10 @@ def main():
                 "mic_sync_mode": mic_cfg.get("sync_mode"),
                 "suspect_threshold": frame.suspect_threshold,
                 "alert_threshold": frame.alert_threshold,
+                "f0_stable": frame.f0_stable,
+                "hf_label": last_hf_result.label if last_hf_result is not None else None,
+                "hf_class_probs": last_hf_result.class_probs if last_hf_result is not None else {},
+                "hf_error": last_hf_result.error if last_hf_result is not None else None,
                 **spectrum,
                 **spectrogram,
                 "harmonic_lines": harmonic_lines,
