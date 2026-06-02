@@ -67,5 +67,6 @@ def test_hf_only_still_does_not_alert_with_stability_enabled():
 
     frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.99)
 
-    assert frame.status == "background"
+    assert frame.status == "suspect"
+    assert frame.operator_label == "ml_drone_candidate"
     assert frame.harmonic_score < frame.suspect_threshold

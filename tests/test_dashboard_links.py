@@ -28,4 +28,16 @@ def test_score_percent_formatting():
 def test_decision_display_labels_non_drone_harmonic():
     state = decision_display_state({"metadata": {"harmonic_evidence_pct": 0.95, "ml_drone_pct": 0.01}})
 
-    assert state["label"] == "non-drone harmonic"
+    assert state["label"] == "NON-DRONE HARMONIC"
+
+
+def test_decision_display_uses_operator_label_for_ml_candidate():
+    state = decision_display_state(
+        {
+            "operator_label": "ml_drone_candidate",
+            "harmonic_evidence_pct": 0.23,
+            "ml_drone_pct": 0.99,
+        }
+    )
+
+    assert state["label"] == "ML DRONE CANDIDATE"

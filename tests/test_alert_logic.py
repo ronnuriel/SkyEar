@@ -16,6 +16,9 @@ def _event(
     best_f0_hz: int | None = 1000,
     channel_agreement_count: int = 1,
     f0_stable: bool = False,
+    harmonic_evidence_pct: float | None = None,
+    ml_drone_pct: float | None = None,
+    operator_label: str | None = None,
 ) -> AcousticEvent:
     return AcousticEvent(
         station_id=station_id,
@@ -23,15 +26,21 @@ def _event(
         status=status,
         confidence=confidence,
         harmonic_score=harmonic_score,
+        harmonic_evidence_pct=harmonic_evidence_pct,
         best_f0_hz=best_f0_hz,
+        ml_drone_pct=ml_drone_pct,
         hf_p_drone=hf_p_drone,
+        operator_label=operator_label,
         calibrated=True,
         channel_agreement_count=channel_agreement_count,
         channel_count=1,
         metadata={
             "suspect_threshold": 16.0,
             "alert_threshold": 22.0,
+            "harmonic_evidence_pct": harmonic_evidence_pct,
+            "ml_drone_pct": ml_drone_pct,
             "f0_stable": f0_stable,
+            "operator_label": operator_label,
         },
     )
 
@@ -91,6 +100,78 @@ def test_hf_negative_harmonic_sources_do_not_confirm_network():
 
     assert alert.level < 2
     assert "hf_negative_count=2" in alert.reason
+
+
+def test_two_ml_strong_partial_harmonic_stations_elevate_to_level_2():
+    events = [
+        _event(
+            "station_1",
+            status="suspect",
+            confidence=0.2,
+            harmonic_score=17.2,
+            harmonic_evidence_pct=0.2,
+            hf_p_drone=0.99,
+            ml_drone_pct=0.99,
+            best_f0_hz=800,
+            operator_label="ml_drone_candidate",
+        ),
+        _event(
+            "station_2",
+            status="suspect",
+            confidence=0.2,
+            harmonic_score=17.2,
+            harmonic_evidence_pct=0.2,
+            hf_p_drone=0.99,
+            ml_drone_pct=0.99,
+            best_f0_hz=1200,
+            operator_label="ml_drone_candidate",
+        ),
+    ]
+
+    alert = alert_level_from_recent_events(events)
+
+    assert alert.level == 2
+
+
+def test_ml_only_without_harmonic_support_stays_level_1_max():
+    events = [
+        _event(
+            "station_1",
+            status="background",
+            confidence=0.2,
+            harmonic_score=0.0,
+            harmonic_evidence_pct=0.0,
+            hf_p_drone=0.99,
+            ml_drone_pct=0.99,
+            best_f0_hz=None,
+            operator_label="ml_drone_candidate",
+        )
+    ]
+
+    alert = alert_level_from_recent_events(events)
+
+    assert alert.level <= 1
+
+
+def test_three_ml_strong_weak_harmonic_stations_are_level_2_not_level_3():
+    events = [
+        _event(
+            f"station_{idx}",
+            status="suspect",
+            confidence=0.2,
+            harmonic_score=16.6,
+            harmonic_evidence_pct=0.1,
+            hf_p_drone=0.99,
+            ml_drone_pct=0.99,
+            best_f0_hz=[700, 980, 1260][idx],
+            operator_label="ml_drone_candidate",
+        )
+        for idx in range(3)
+    ]
+
+    alert = alert_level_from_recent_events(events)
+
+    assert alert.level == 2
 
 
 def test_one_alert_station_elevates_to_level_2_not_level_3():

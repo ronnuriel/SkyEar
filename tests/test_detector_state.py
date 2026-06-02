@@ -85,7 +85,7 @@ def test_signal_clears_to_background_after_clean_windows():
     state.update(_harmonic(), SR, 4.5)
     state.update(_harmonic(), SR, 6.1)
     holding = state.update(_quiet(), SR, 7.0)
-    cleared = state.update(_quiet(), SR, 9.0)
+    cleared = state.update(_quiet(), SR, 10.0)
 
     assert holding.status == "alert"
     assert cleared.status == "background"
@@ -107,8 +107,10 @@ def test_hf_support_alone_does_not_trigger_alert():
 
     frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.99, cnn_p_drone=0.99)
 
-    assert frame.status == "background"
+    assert frame.status == "suspect"
+    assert frame.operator_label == "ml_drone_candidate"
     assert frame.harmonic_score < frame.suspect_threshold
+    assert frame.decision_reason == "ML strongly indicates drone; harmonic rotor evidence is weak"
 
 
 def test_hf_negative_caps_single_channel_alert_harmonic_to_suspect():
@@ -152,6 +154,31 @@ def test_hf_positive_with_high_harmonic_can_reach_alert_after_duration():
     assert third.status == "alert"
 
 
+def test_strong_ml_with_moderate_harmonic_is_operator_candidate_not_alert():
+    state = _calibrated_state(min_alert_threshold=362.0)
+
+    frame = state.update(_harmonic(), SR, 3.0, hf_p_drone=0.99)
+
+    assert 0.20 <= frame.harmonic_evidence_pct <= 0.30
+    assert frame.ml_drone_pct == 0.99
+    assert frame.status == "suspect"
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.decision_reason == "ML strongly indicates drone; harmonic rotor evidence is weak"
+
+
+def test_strong_ml_with_harmonic_support_becomes_drone_like():
+    state = _calibrated_state(min_alert_threshold=160.0)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.99)
+    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.99)
+
+    assert frame.harmonic_evidence_pct >= 0.45
+    assert frame.harmonic_evidence_pct_smoothed >= 0.45
+    assert frame.status == "drone_like"
+    assert frame.operator_label == "drone_like"
+    assert frame.decision_reason == "ML and harmonic rotor evidence agree"
+
+
 def test_hf_missing_single_channel_keeps_existing_harmonic_behavior():
     state = _calibrated_state()
 
@@ -189,3 +216,42 @@ def test_multichannel_agreement_and_stable_f0_can_alert_despite_negative_hf():
     assert frame.agreement_count >= 2
     assert frame.f0_stable is True
     assert frame.status == "alert"
+
+
+def test_alert_hysteresis_holds_briefly_then_clears():
+    state = _calibrated_state(clear_after_sec=2.5)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.95)
+    state.update(_harmonic(), SR, 4.5, hf_p_drone=0.95)
+    alert = state.update(_harmonic(), SR, 6.1, hf_p_drone=0.95)
+    holding = state.update(_quiet(), SR, 7.0, hf_p_drone=0.95)
+    cleared = state.update(_quiet(), SR, 10.0)
+
+    assert alert.status == "alert"
+    assert holding.status == "alert"
+    assert cleared.status == "background"
+
+
+def test_f0_family_stability_treats_nearby_values_as_one_family():
+    state = _calibrated_state()
+
+    canonical_values = []
+    for raw in [520, 535, 620, 635]:
+        canonical = state._canonical_f0_family(raw)
+        state._record_window_history(30.0, 0.50, None, raw, canonical)
+        canonical_values.append(canonical)
+
+    assert canonical_values == [520, 520, 520, 520]
+    assert state._f0_family_is_stable() is True
+
+
+def test_f0_family_stability_treats_octaves_as_one_family():
+    state = _calibrated_state()
+
+    first = state._canonical_f0_family(520)
+    state._record_window_history(30.0, 0.50, None, 520, first)
+    second = state._canonical_f0_family(1040)
+    state._record_window_history(30.0, 0.50, None, 1040, second)
+
+    assert first == 520
+    assert second == 520

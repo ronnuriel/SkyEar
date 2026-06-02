@@ -20,14 +20,39 @@ def _thresholds(event: AcousticEvent) -> tuple[float, float]:
 
 
 def _harmonic_norm(event: AcousticEvent, suspect_threshold: float, alert_threshold: float) -> float:
+    metadata = event.metadata or {}
+    value_from_event = event.harmonic_evidence_pct_smoothed
+    if value_from_event is None:
+        value_from_event = event.harmonic_evidence_pct
+    if value_from_event is None:
+        value_from_event = metadata.get("harmonic_evidence_pct_smoothed")
+    if value_from_event is None:
+        value_from_event = metadata.get("harmonic_evidence_pct")
+    if value_from_event is not None:
+        return float(max(0.0, min(1.0, float(value_from_event))))
     value = (float(event.harmonic_score or 0.0) - suspect_threshold) / (alert_threshold - suspect_threshold)
     return float(max(0.0, min(1.0, value)))
 
 
+def _ml_pct(event: AcousticEvent) -> float:
+    metadata = event.metadata or {}
+    value = event.ml_drone_pct_smoothed
+    if value is None:
+        value = event.ml_drone_pct
+    if value is None:
+        value = metadata.get("ml_drone_pct_smoothed")
+    if value is None:
+        value = metadata.get("ml_drone_pct")
+    if value is None:
+        value = event.hf_p_drone
+    return float(max(0.0, min(1.0, float(value or 0.0))))
+
+
 def _is_near_threshold_background(event: AcousticEvent, suspect_threshold: float) -> bool:
-    hf = float(event.hf_p_drone or 0.0)
+    hf = _ml_pct(event)
     harmonic = float(event.harmonic_score or 0.0)
-    return hf >= 0.90 and harmonic >= suspect_threshold * 0.85
+    harmonic_pct = _harmonic_norm(event, suspect_threshold, suspect_threshold + 1.0)
+    return hf >= 0.90 and (harmonic >= suspect_threshold * 0.85 or harmonic_pct > 0.0)
 
 
 def _hf_negative(event: AcousticEvent) -> bool:
@@ -51,9 +76,11 @@ def station_evidence_score(event: AcousticEvent) -> float:
         return 0.0
 
     harmonic_norm = _harmonic_norm(event, suspect_threshold, alert_threshold)
-    hf = float(event.hf_p_drone or 0.0)
+    hf = _ml_pct(event)
     local_conf = float(event.confidence or 0.0)
     score = 0.45 * local_conf + 0.30 * hf + 0.25 * harmonic_norm
+    if hf >= 0.90:
+        score = max(score, 0.60 if harmonic_norm < 0.15 else 0.65)
 
     if status == "suspect":
         score += 0.15
@@ -120,20 +147,26 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     drone_like_or_alert_count = sum(1 for event in confirming_events if _event_status(event) in {"drone_like", "alert"})
     suspect_count = sum(1 for event in confirming_events if _event_status(event) == "suspect")
     weak_station_count = sum(1 for _, score in confirming_active if score >= 0.45)
+    ml_partial_count = sum(
+        1
+        for event in confirming_events
+        if _ml_pct(event) >= 0.90 and _harmonic_norm(event, *_thresholds(event)) >= 0.15
+    )
+    strong_harmonic_count = sum(1 for event in confirming_events if _harmonic_norm(event, *_thresholds(event)) >= 0.45)
     hf_negative_count = sum(1 for event in active_events if _hf_negative(event))
 
-    if (total_score >= 2.0 and active_station_count >= 2) or drone_like_or_alert_count >= 2 or (
+    if (total_score >= 2.0 and active_station_count >= 2 and strong_harmonic_count >= 2) or drone_like_or_alert_count >= 2 or (
         suspect_count >= 3 and same_f0
     ):
         level = 3
-    elif total_score >= 1.2 or weak_station_count >= 2 or local_alert_count >= 1:
+    elif total_score >= 1.2 or weak_station_count >= 2 or ml_partial_count >= 2 or local_alert_count >= 1:
         level = 2
     elif total_score >= 0.6:
         level = 1
     else:
         level = 0
 
-    max_hf = max([float(event.hf_p_drone or 0.0) for event in active_events], default=0.0)
+    max_hf = max([_ml_pct(event) for event in active_events], default=0.0)
     mean_harmonic = (
         sum(float(event.harmonic_score or 0.0) for event in active_events) / active_station_count
         if active_station_count
