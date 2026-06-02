@@ -23,6 +23,19 @@ def spectrum_page_url(station_id: str, server_url: str) -> str:
     )
 
 
+def external_spectrum_app_url(
+    station_id: str,
+    server_url: str,
+    spectrum_app_url: str = "http://localhost:8502",
+) -> str:
+    return (
+        spectrum_app_url.rstrip("/")
+        + "/"
+        + f"?station_id={quote(station_id, safe='')}"
+        + f"&server_url={quote(server_url, safe='')}"
+    )
+
+
 def status_label(status: str) -> tuple[str, str]:
     return STATUS_STYLE.get(status, (status.upper(), "info"))
 
@@ -34,7 +47,7 @@ def plot_spectrum_figure(metadata: dict, small: bool = False):
     if not freqs or not db:
         return None
 
-    fig, ax = plt.subplots(figsize=(5.5, 1.8) if small else (9.0, 3.2))
+    fig, ax = plt.subplots(figsize=(5.5, 1.8) if small else (12.0, 4.0))
     ax.plot(freqs, db, linewidth=1.0)
     for line in harmonic_lines:
         freq = line.get("freq_hz")
@@ -59,7 +72,7 @@ def plot_spectrogram_figure(metadata: dict):
         return None
 
     matrix = np.asarray(db, dtype=float)
-    fig, ax = plt.subplots(figsize=(9.0, 3.4))
+    fig, ax = plt.subplots(figsize=(12.0, 5.0))
     extent = [min(times), max(times), min(freqs), max(freqs)]
     image = ax.imshow(
         matrix,

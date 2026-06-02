@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from dashboard.station_view import plot_spectrum_figure, spectrum_page_url, status_label
+from dashboard.station_view import external_spectrum_app_url, plot_spectrum_figure, status_label
 
 
 def _draw_status(status: str):
@@ -13,7 +13,13 @@ def _draw_status(status: str):
     getattr(st, kind)(label)
 
 
-def _render_station_card(event: dict, fusion_level: int, server_url: str, show_inline_mini_spectrum: bool):
+def _render_station_card(
+    event: dict,
+    fusion_level: int,
+    server_url: str,
+    spectrum_app_url: str,
+    show_inline_mini_spectrum: bool,
+):
     metadata = event.get("metadata") or {}
     station_id = event.get("station_id", "unknown")
     station_name = event.get("station_name")
@@ -42,7 +48,7 @@ def _render_station_card(event: dict, fusion_level: int, server_url: str, show_i
         detail_cols[2].metric("RMS", f"{float(event.get('rms') or 0.0):.4f}")
         detail_cols[3].metric("Duration", f"{float(event.get('duration_sec') or 0.0):.1f}s")
 
-        st.markdown(f"[Open Spectrum]({spectrum_page_url(station_id, server_url)})")
+        st.markdown(f"[Open Spectrum]({external_spectrum_app_url(station_id, server_url, spectrum_app_url)})")
 
         if show_inline_mini_spectrum:
             fig = plot_spectrum_figure(metadata, small=True)
@@ -68,6 +74,7 @@ refresh_sec = st.sidebar.number_input(
     step=0.5,
 )
 show_inline_mini_spectrum = st.sidebar.checkbox("Show inline mini spectrum", value=False)
+spectrum_app_url = st.sidebar.text_input("Spectrum app URL", value="http://localhost:8502")
 max_stations_per_row = int(
     st.sidebar.number_input("Max stations per row", min_value=1, max_value=4, value=3, step=1)
 )
@@ -111,7 +118,7 @@ try:
         columns = st.columns(len(row_events))
         for column, event in zip(columns, row_events):
             with column:
-                _render_station_card(event, fusion_level, server_url, show_inline_mini_spectrum)
+                _render_station_card(event, fusion_level, server_url, spectrum_app_url, show_inline_mini_spectrum)
 except Exception as e:
     st.error(f"Could not load stations: {e}")
 

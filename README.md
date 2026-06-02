@@ -42,11 +42,17 @@ Terminal 3:
 PYTHONPATH=. streamlit run dashboard/app.py
 ```
 
+Terminal 4, optional dedicated spectrum page:
+
+```bash
+PYTHONPATH=. streamlit run dashboard/station_spectrum_app.py --server.port 8502
+```
+
 ## Operator Dashboard
 
 The main dashboard is a tactical overview. It shows compact station cards, fusion level, status, confidence, harmonic score, best f0, channel agreement, strongest channel, RMS, and duration.
 
-Use **Open Spectrum** on any station card to inspect the detailed spectrum page. The detailed page shows the full latest spectrum, harmonic markers, spectrogram, and per-channel evidence.
+Use **Open Spectrum** on any station card to inspect the dedicated spectrum app. The detailed page shows the full latest spectrum, harmonic markers, spectrogram, and per-channel evidence without making the main dashboard flicker.
 
 ## Client Demo
 

@@ -6,14 +6,14 @@
 #   altitude_m: 20.0
 
 station:
-  station_id: station_001
+  station_id: station_003
   name: Home Mac Test Node2
   latitude: 32.0853
   longitude: 34.7818
   altitude_m: 20.0
 
 audio:
-  device_id: 0
+  device_id: 2
   sample_rate: 44100
   channels: 1
   window_sec: 2.0
@@ -28,6 +28,19 @@ detector:
   calibration_seconds: 8.0
   min_alert_duration_sec: 3.0
   clear_after_sec: 2.5
+
+stability:
+  enabled: true
+  history_windows: 4
+  max_f0_std_hz: 80
+  min_score_windows: 3
+
+hf:
+  enabled: false
+  model_id: preszzz/drone-audio-detection-05-17-trial-0
+  run_every_n_windows: 2
+  threshold: 0.70
+  fallback_drone_label_idx: 1
 
 mic_array:
   profile: mac_builtin_mono

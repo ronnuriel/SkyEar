@@ -19,6 +19,9 @@ st.code(
 st.markdown("Terminal 3:")
 st.code("PYTHONPATH=. streamlit run dashboard/app.py", language="bash")
 
+st.markdown("Terminal 4, optional dedicated spectrum page:")
+st.code("PYTHONPATH=. streamlit run dashboard/station_spectrum_app.py --server.port 8502", language="bash")
+
 st.subheader("What the operator should see")
 st.markdown(
     """
