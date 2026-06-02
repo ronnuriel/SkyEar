@@ -48,6 +48,18 @@ def _ml_pct(event: AcousticEvent) -> float:
     return float(max(0.0, min(1.0, float(value or 0.0))))
 
 
+def _combined_pct(event: AcousticEvent) -> float:
+    metadata = event.metadata or {}
+    value = event.combined_drone_evidence_pct
+    if value is None:
+        value = metadata.get("combined_drone_evidence_pct")
+    if value is not None:
+        return float(max(0.0, min(1.0, float(value))))
+    ml = _ml_pct(event)
+    harmonic = _harmonic_norm(event, *_thresholds(event))
+    return float(max(0.0, min(1.0, (2.0 * ml * harmonic) / (ml + harmonic + 1e-6))))
+
+
 def _is_near_threshold_background(event: AcousticEvent, suspect_threshold: float) -> bool:
     hf = _ml_pct(event)
     harmonic = float(event.harmonic_score or 0.0)
@@ -77,10 +89,15 @@ def station_evidence_score(event: AcousticEvent) -> float:
 
     harmonic_norm = _harmonic_norm(event, suspect_threshold, alert_threshold)
     hf = _ml_pct(event)
+    combined = _combined_pct(event)
     local_conf = float(event.confidence or 0.0)
-    score = 0.45 * local_conf + 0.30 * hf + 0.25 * harmonic_norm
-    if hf >= 0.90:
-        score = max(score, 0.60 if harmonic_norm < 0.15 else 0.65)
+    score = 0.30 * local_conf + 0.20 * hf + 0.20 * harmonic_norm + 0.30 * combined
+    if combined >= 0.60:
+        score = max(score, 0.65)
+    elif hf >= 0.90 and harmonic_norm >= 0.15:
+        score = max(score, 0.55)
+    elif hf >= 0.90 and harmonic_norm <= 0.01:
+        score = min(score, 0.59)
 
     if status == "suspect":
         score += 0.15
@@ -124,7 +141,12 @@ def _same_f0_detected(events: list[AcousticEvent]) -> bool:
 
 def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: float = 8.0) -> FusedAlert:
     now = time.time()
-    recent = [e for e in events if now - e.timestamp_unix <= window_sec]
+    recent = [
+        e
+        for e in events
+        if now - float(e.server_received_unix or (e.metadata or {}).get("server_received_unix") or e.timestamp_unix)
+        <= window_sec
+    ]
     latest_events = _latest_by_station(recent)
     scored = [(event, station_evidence_score(event)) for event in latest_events]
     active = [(event, score) for event, score in scored if score > 0.0]
@@ -147,6 +169,9 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     drone_like_or_alert_count = sum(1 for event in confirming_events if _event_status(event) in {"drone_like", "alert"})
     suspect_count = sum(1 for event in confirming_events if _event_status(event) == "suspect")
     weak_station_count = sum(1 for _, score in confirming_active if score >= 0.45)
+    combined_mid_count = sum(1 for event in confirming_events if _combined_pct(event) >= 0.45)
+    combined_strong_count = sum(1 for event in confirming_events if _combined_pct(event) >= 0.60)
+    combined_high_count = sum(1 for event in confirming_events if _combined_pct(event) >= 0.75)
     ml_partial_count = sum(
         1
         for event in confirming_events
@@ -155,13 +180,21 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     strong_harmonic_count = sum(1 for event in confirming_events if _harmonic_norm(event, *_thresholds(event)) >= 0.45)
     hf_negative_count = sum(1 for event in active_events if _hf_negative(event))
 
-    if (total_score >= 2.0 and active_station_count >= 2 and strong_harmonic_count >= 2) or drone_like_or_alert_count >= 2 or (
-        suspect_count >= 3 and same_f0
+    if (
+        (same_f0 and combined_high_count >= 2)
+        or drone_like_or_alert_count >= 2
+        or (suspect_count >= 3 and same_f0 and combined_mid_count >= 3)
     ):
         level = 3
-    elif total_score >= 1.2 or weak_station_count >= 2 or ml_partial_count >= 2 or local_alert_count >= 1:
+    elif (
+        total_score >= 1.2
+        or weak_station_count >= 2
+        or combined_mid_count >= 2
+        or ml_partial_count >= 2
+        or local_alert_count >= 1
+    ):
         level = 2
-    elif total_score >= 0.6:
+    elif total_score >= 0.6 or combined_strong_count >= 1:
         level = 1
     else:
         level = 0
@@ -176,7 +209,8 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
         "network acoustic confirmation candidate; "
         f"active_stations={active_station_count}, max_hf_p_drone={max_hf:.2f}, "
         f"mean_harmonic={mean_harmonic:.1f}, same_f0={'yes' if same_f0 else 'no'}, "
-        f"local_alerts={local_alert_count}, hf_negative_count={hf_negative_count}, total_score={total_score:.2f}"
+        f"combined_high={combined_high_count}, local_alerts={local_alert_count}, "
+        f"hf_negative_count={hf_negative_count}, total_score={total_score:.2f}"
     )
 
     confidence = float(max(0.0, min(1.0, total_score / 2.0)))

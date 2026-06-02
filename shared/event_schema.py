@@ -26,6 +26,7 @@ class AcousticEvent(BaseModel):
     station_id: str
     station_name: Optional[str] = None
     timestamp_unix: float
+    server_received_unix: Optional[float] = None
     station_location: Optional[GeoPoint] = None
     status: EventStatus
     confidence: float = Field(ge=0.0, le=1.0)
@@ -39,6 +40,7 @@ class AcousticEvent(BaseModel):
     f0_family_stable: Optional[bool] = None
     ml_drone_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     ml_drone_pct_smoothed: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    combined_drone_evidence_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     hf_p_drone: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     cnn_p_drone: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     hf_negative: Optional[bool] = None
@@ -57,6 +59,26 @@ class AcousticEvent(BaseModel):
     channel_evidence: list[ChannelEvidence] = Field(default_factory=list)
     detector_version: Optional[str] = None
     station_mode: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class StationHeartbeat(BaseModel):
+    station_id: str
+    station_name: Optional[str] = None
+    timestamp_unix: float
+    server_received_unix: Optional[float] = None
+    status: str = "online"
+    station_location: Optional[GeoPoint] = None
+    audio_device: Optional[str] = None
+    sample_rate: Optional[int] = None
+    channels: Optional[int] = None
+    calibrated: Optional[bool] = None
+    detector_version: Optional[str] = None
+    station_mode: Optional[str] = None
+    last_event_status: Optional[str] = None
+    last_harmonic_score: Optional[float] = None
+    last_hf_p_drone: Optional[float] = None
+    last_error: Optional[str] = None
+    errors: list[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class FusedAlert(BaseModel):

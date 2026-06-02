@@ -8,9 +8,10 @@ from typing import Iterable
 import numpy as np
 import requests
 
-from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
+from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
 from station.audio_capture import to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
+from station.station_agent import heartbeat_url_from_events_url
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
 
@@ -146,6 +147,7 @@ def build_event(
         f0_family_stable=frame.f0_family_stable,
         ml_drone_pct=frame.ml_drone_pct,
         ml_drone_pct_smoothed=frame.ml_drone_pct_smoothed,
+        combined_drone_evidence_pct=frame.combined_drone_evidence_pct,
         hf_negative=frame.hf_negative,
         hf_positive=frame.hf_positive,
         decision_reason=frame.decision_reason,
@@ -177,6 +179,7 @@ def build_event(
             "harmonic_evidence_pct_smoothed": frame.harmonic_evidence_pct_smoothed,
             "ml_drone_pct": frame.ml_drone_pct,
             "ml_drone_pct_smoothed": frame.ml_drone_pct_smoothed,
+            "combined_drone_evidence_pct": frame.combined_drone_evidence_pct,
             "hf_negative": frame.hf_negative,
             "hf_positive": frame.hf_positive,
             "decision_reason": frame.decision_reason,
@@ -186,6 +189,26 @@ def build_event(
             "harmonic_lines": harmonic_lines,
             **metadata_extra,
         },
+    )
+
+
+def build_heartbeat(station: SimulatedStation, event: AcousticEvent, timestamp: float, sample_rate: int) -> StationHeartbeat:
+    return StationHeartbeat(
+        station_id=station.station_id,
+        station_name=event.station_name,
+        timestamp_unix=timestamp,
+        status="online",
+        station_location=event.station_location,
+        audio_device="synthetic",
+        sample_rate=sample_rate,
+        channels=event.channel_count,
+        calibrated=event.calibrated,
+        detector_version=DETECTOR_VERSION,
+        station_mode=event.station_mode,
+        last_event_status=event.status.value if hasattr(event.status, "value") else str(event.status),
+        last_harmonic_score=event.harmonic_score,
+        last_hf_p_drone=event.hf_p_drone,
+        metadata={"source": "simulate_station"},
     )
 
 
@@ -214,6 +237,8 @@ def run_simulation(args: argparse.Namespace) -> None:
     stations = make_simulated_stations(args.num_stations, args.station_id)
     start = time.time()
     total_duration = 46.0 if args.scenario == "drone_pass" else 30.0
+    heartbeat_url = heartbeat_url_from_events_url(args.server)
+    last_heartbeat_by_station: dict[str, float] = {}
 
     while True:
         loop_start = time.time()
@@ -231,6 +256,10 @@ def run_simulation(args: argparse.Namespace) -> None:
             )
             event = build_event(station, audio, args.sample_rate, loop_start)
             requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
+            if args.heartbeat and loop_start - last_heartbeat_by_station.get(station.station_id, 0.0) >= args.heartbeat_interval:
+                heartbeat = build_heartbeat(station, event, loop_start, args.sample_rate)
+                requests.post(heartbeat_url, json=heartbeat.model_dump(mode="json"), timeout=2.0)
+                last_heartbeat_by_station[station.station_id] = loop_start
             print(
                 f"{event.station_id} {event.status:11s} "
                 f"conf={event.confidence:.2f} harm={event.harmonic_score:.1f} "
@@ -266,6 +295,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-sec", type=float, default=2.0)
     parser.add_argument("--realtime", action="store_true")
     parser.add_argument("--num-stations", type=int, default=1)
+    parser.add_argument("--heartbeat", action="store_true")
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0)
     return parser.parse_args()
 
 

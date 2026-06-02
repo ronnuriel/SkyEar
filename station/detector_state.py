@@ -75,6 +75,7 @@ class StationDetectionFrame:
     harmonic_score_smoothed: float = 0.0
     ml_drone_pct: Optional[float] = None
     ml_drone_pct_smoothed: Optional[float] = None
+    combined_drone_evidence_pct: float = 0.0
     hf_negative: bool = False
     hf_positive: bool = False
     decision_reason: str = "no acoustic evidence"
@@ -102,6 +103,12 @@ def _as_samples_by_channels(audio: np.ndarray) -> np.ndarray:
     if audio.ndim != 2:
         raise ValueError(f"audio must be mono or 2D multi-channel, got shape {audio.shape}")
     return audio
+
+
+def _combined_drone_evidence(ml_drone_pct: Optional[float], harmonic_evidence_pct: float) -> float:
+    ml = float(np.clip(float(ml_drone_pct or 0.0), 0.0, 1.0))
+    harmonic = float(np.clip(float(harmonic_evidence_pct or 0.0), 0.0, 1.0))
+    return float(np.clip((2.0 * ml * harmonic) / (ml + harmonic + 1e-6), 0.0, 1.0))
 
 
 class StationDetectorState:
@@ -184,6 +191,10 @@ class StationDetectorState:
         harmonic_score_smoothed = self._smoothed(self.raw_harmonic_score_history)
         harmonic_evidence_pct_smoothed = self._smoothed(self.harmonic_evidence_pct_history)
         ml_drone_pct_smoothed = ml_drone_pct
+        combined_drone_evidence_pct = _combined_drone_evidence(
+            ml_drone_pct_smoothed,
+            harmonic_evidence_pct_smoothed,
+        )
         has_suspect_harmonic = harmonic_evidence_pct_raw > 0.0 or evidence_score >= self.suspect_threshold
         self._record_history(canonical_best_f0, harmonic_score_smoothed)
         f0_stable = self._f0_is_stable()
@@ -216,6 +227,7 @@ class StationDetectorState:
             timestamp=timestamp,
             has_suspect_harmonic=has_suspect_harmonic,
             harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
+            combined_drone_evidence_pct=combined_drone_evidence_pct,
             ml_strong=ml_strong,
             hf_negative=hf_negative,
             drone_like_ready=drone_like_ready,
@@ -227,9 +239,20 @@ class StationDetectorState:
         decision_harmonic_pct = harmonic_evidence_pct_smoothed
         if hf_negative:
             decision_harmonic_pct = max(harmonic_evidence_pct_raw, harmonic_evidence_pct_smoothed)
+        if (
+            not hf_negative
+            and status != "alert"
+            and (
+                combined_drone_evidence_pct >= 0.60
+                or (ml_strong and decision_harmonic_pct >= 0.40)
+            )
+        ):
+            status = "drone_like"
+            self._last_active_status = status
         operator_label = self._operator_label(
             status=status,
             harmonic_evidence_pct=decision_harmonic_pct,
+            combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_negative=hf_negative,
             ml_strong=ml_strong,
         )
@@ -237,6 +260,7 @@ class StationDetectorState:
             status=status,
             has_suspect_harmonic=has_suspect_harmonic,
             harmonic_evidence_pct=decision_harmonic_pct,
+            combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_negative=hf_negative,
             hf_positive=hf_positive,
             ml_strong=ml_strong,
@@ -268,6 +292,7 @@ class StationDetectorState:
             harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
             ml_drone_pct=ml_drone_pct,
             ml_drone_pct_smoothed=ml_drone_pct_smoothed,
+            combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_negative=hf_negative,
             hf_positive=hf_positive,
             decision_reason=decision_reason,
@@ -359,6 +384,7 @@ class StationDetectorState:
         timestamp: float,
         has_suspect_harmonic: bool,
         harmonic_evidence_pct_smoothed: float,
+        combined_drone_evidence_pct: float,
         ml_strong: bool,
         hf_negative: bool,
         drone_like_ready: bool,
@@ -384,11 +410,12 @@ class StationDetectorState:
                 self._alert_below_since = None
 
             alert_enter_ready = (
-                harmonic_evidence_pct_smoothed >= self.config.alert_enter_pct
-                and self._recent_pct_all(self.config.alert_enter_pct, self.config.min_alert_windows)
-                and duration >= self.config.min_alert_duration_sec
-                and alert_ready
-            )
+                (
+                    harmonic_evidence_pct_smoothed >= self.config.alert_enter_pct
+                    and self._recent_pct_all(self.config.alert_enter_pct, self.config.min_alert_windows)
+                )
+                or combined_drone_evidence_pct >= 0.75
+            ) and duration >= self.config.min_alert_duration_sec and alert_ready
             if alert_enter_ready:
                 self._last_active_status = "alert"
                 self._alert_below_since = None
@@ -399,11 +426,13 @@ class StationDetectorState:
                 return "suspect", duration
 
             drone_like_enter_ready = (
-                harmonic_evidence_pct_smoothed >= self.config.drone_like_enter_pct
-                and self._recent_pct_all(self.config.drone_like_enter_pct, self.config.min_drone_like_windows)
-                and drone_like_ready
+                (
+                    harmonic_evidence_pct_smoothed >= self.config.drone_like_enter_pct
+                    and self._recent_pct_all(self.config.drone_like_enter_pct, self.config.min_drone_like_windows)
+                )
+                or combined_drone_evidence_pct >= 0.60
             )
-            if drone_like_enter_ready:
+            if drone_like_enter_ready and drone_like_ready:
                 self._last_active_status = "drone_like"
                 return "drone_like", duration
 
@@ -511,6 +540,7 @@ class StationDetectorState:
         status: str,
         has_suspect_harmonic: bool,
         harmonic_evidence_pct: float,
+        combined_drone_evidence_pct: float,
         hf_negative: bool,
         hf_positive: bool,
         ml_strong: bool,
@@ -520,6 +550,10 @@ class StationDetectorState:
         high_harmonic = harmonic_evidence_pct >= 0.75
         if hf_negative and high_harmonic:
             return "harmonic source detected, but ML strongly rejects drone"
+        if combined_drone_evidence_pct >= 0.75:
+            return "strong combined ML and harmonic rotor evidence"
+        if combined_drone_evidence_pct >= 0.60:
+            return "ML and harmonic rotor evidence strongly agree"
         if ml_strong and harmonic_evidence_pct < max(0.30, self.config.ml_candidate_harmonic_min_pct):
             return "ML strongly indicates drone; harmonic rotor evidence is weak"
         if ml_strong and harmonic_evidence_pct < self.config.ml_drone_like_harmonic_min_pct:
@@ -538,6 +572,7 @@ class StationDetectorState:
         self,
         status: str,
         harmonic_evidence_pct: float,
+        combined_drone_evidence_pct: float,
         hf_negative: bool,
         ml_strong: bool,
     ) -> str:
@@ -546,6 +581,8 @@ class StationDetectorState:
         if hf_negative and harmonic_evidence_pct >= 0.75:
             return "non_drone_harmonic"
         if status == "drone_like":
+            return "drone_like"
+        if combined_drone_evidence_pct >= 0.60:
             return "drone_like"
         if ml_strong:
             return "ml_drone_candidate"
@@ -615,6 +652,7 @@ class StationDetectorState:
         harmonic_score_smoothed: Optional[float] = None,
         ml_drone_pct: Optional[float] = None,
         ml_drone_pct_smoothed: Optional[float] = None,
+        combined_drone_evidence_pct: float = 0.0,
         hf_negative: bool = False,
         hf_positive: bool = False,
         decision_reason: str = "no acoustic evidence",
@@ -650,6 +688,7 @@ class StationDetectorState:
             ml_drone_pct_smoothed=None
             if ml_drone_pct_smoothed is None
             else float(np.clip(ml_drone_pct_smoothed, 0.0, 1.0)),
+            combined_drone_evidence_pct=float(np.clip(combined_drone_evidence_pct, 0.0, 1.0)),
             hf_negative=bool(hf_negative),
             hf_positive=bool(hf_positive),
             decision_reason=str(decision_reason),

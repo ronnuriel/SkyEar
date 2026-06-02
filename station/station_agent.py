@@ -6,7 +6,7 @@ import numpy as np
 import requests
 import yaml
 
-from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
+from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
 from station.audio_capture import audio_blocks, list_input_devices, to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
@@ -64,6 +64,19 @@ def _station_mode(audio: np.ndarray, direction_allowed: bool) -> str:
         return "unsynchronized_multimic_voting"
     return "mono"
 
+def heartbeat_url_from_events_url(events_url: str) -> str:
+    events_url = str(events_url).rstrip("/")
+    if events_url.endswith("/events"):
+        return events_url[: -len("/events")] + "/stations/heartbeat"
+    return events_url + "/stations/heartbeat"
+
+def _audio_device_label(audio_cfg: dict[str, Any]) -> str | None:
+    if audio_cfg.get("device_name"):
+        return str(audio_cfg["device_name"])
+    if audio_cfg.get("device_id") is not None:
+        return f"id={audio_cfg['device_id']}"
+    return None
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config_station.yaml")
@@ -81,6 +94,7 @@ def main():
     mic_cfg = cfg.get("mic_array", {})
     stability_cfg = cfg.get("stability", {})
     hf_cfg = cfg.get("hf", {})
+    heartbeat_cfg = cfg.get("heartbeat", {})
 
     detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg))
     hf_detector = None
@@ -94,6 +108,11 @@ def main():
     window_index = 0
     last_hf_result = None
     last_send = 0.0
+    last_heartbeat = 0.0
+    last_error = None
+    heartbeat_enabled = bool(heartbeat_cfg.get("enabled", True))
+    heartbeat_interval = float(heartbeat_cfg.get("interval_sec", 5.0))
+    heartbeat_url = str(heartbeat_cfg.get("url") or heartbeat_url_from_events_url(server_cfg["url"]))
     direction_requested = bool(dir_cfg.get("enabled"))
     direction_allowed = direction_requested and mic_cfg.get("sync_mode") == "synchronized"
     if direction_requested and not direction_allowed:
@@ -164,6 +183,7 @@ def main():
             f0_family_stable=frame.f0_family_stable,
             ml_drone_pct=frame.ml_drone_pct,
             ml_drone_pct_smoothed=frame.ml_drone_pct_smoothed,
+            combined_drone_evidence_pct=frame.combined_drone_evidence_pct,
             hf_p_drone=hf_p_drone,
             hf_negative=frame.hf_negative,
             hf_positive=frame.hf_positive,
@@ -198,6 +218,7 @@ def main():
                 "harmonic_evidence_pct_smoothed": frame.harmonic_evidence_pct_smoothed,
                 "ml_drone_pct": frame.ml_drone_pct,
                 "ml_drone_pct_smoothed": frame.ml_drone_pct_smoothed,
+                "combined_drone_evidence_pct": frame.combined_drone_evidence_pct,
                 "hf_negative": frame.hf_negative,
                 "hf_positive": frame.hf_positive,
                 "decision_reason": frame.decision_reason,
@@ -228,9 +249,41 @@ def main():
         if now - last_send >= float(server_cfg["send_interval_sec"]):
             try:
                 requests.post(server_cfg["url"], json=event.model_dump(mode="json"), timeout=1.5)
+                last_error = None
             except Exception as e:
+                last_error = str(e)
                 print("[WARN] send failed:", e)
             last_send = now
+
+        if heartbeat_enabled and now - last_heartbeat >= heartbeat_interval:
+            heartbeat = StationHeartbeat(
+                station_id=station_cfg["station_id"],
+                station_name=station_cfg.get("name"),
+                timestamp_unix=now,
+                status="error" if last_error else "online",
+                station_location=event.station_location,
+                audio_device=_audio_device_label(audio_cfg),
+                sample_rate=sample_rate,
+                channels=int(audio_cfg["channels"]),
+                calibrated=frame.calibrated,
+                detector_version=DETECTOR_VERSION,
+                station_mode=event.station_mode,
+                last_event_status=event.status.value if hasattr(event.status, "value") else str(event.status),
+                last_harmonic_score=event.harmonic_score,
+                last_hf_p_drone=event.hf_p_drone,
+                last_error=last_error,
+                errors=[last_error] if last_error else [],
+                metadata={
+                    "mic_profile": mic_cfg.get("profile"),
+                    "mic_sync_mode": mic_cfg.get("sync_mode"),
+                    "window_index": window_index,
+                },
+            )
+            try:
+                requests.post(heartbeat_url, json=heartbeat.model_dump(mode="json"), timeout=1.5)
+            except Exception as e:
+                print("[WARN] heartbeat failed:", e)
+            last_heartbeat = now
 
 if __name__ == "__main__":
     main()

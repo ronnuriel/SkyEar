@@ -6,7 +6,7 @@ station:
   altitude_m: 20.0
 
 audio:
-  device_id: 2
+  device_id: 3
   sample_rate: 44100
   channels: 1
   window_sec: 2.0

@@ -25,6 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int, default=44100)
     parser.add_argument("--window-sec", type=float, default=2.0)
     parser.add_argument("--realtime", action="store_true")
+    parser.add_argument("--heartbeat", action="store_true")
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0)
     args = parser.parse_args()
     args.num_stations = args.stations
     args.station_id = "sim_001"

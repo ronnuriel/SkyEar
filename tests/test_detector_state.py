@@ -150,7 +150,7 @@ def test_hf_positive_with_high_harmonic_can_reach_alert_after_duration():
     assert first.status in {"suspect", "drone_like"}
     assert third.hf_positive is True
     assert third.f0_stable is True
-    assert third.decision_reason == "ML and harmonic rotor evidence agree"
+    assert third.decision_reason == "strong combined ML and harmonic rotor evidence"
     assert third.status == "alert"
 
 
@@ -176,7 +176,22 @@ def test_strong_ml_with_harmonic_support_becomes_drone_like():
     assert frame.harmonic_evidence_pct_smoothed >= 0.45
     assert frame.status == "drone_like"
     assert frame.operator_label == "drone_like"
-    assert frame.decision_reason == "ML and harmonic rotor evidence agree"
+    assert frame.combined_drone_evidence_pct >= 0.60
+    assert frame.decision_reason == "ML and harmonic rotor evidence strongly agree"
+
+
+def test_combined_evidence_scores_strong_ml_partial_harmonic():
+    state = _calibrated_state(min_alert_threshold=160.0)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=1.0)
+    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=1.0)
+
+    expected = (2.0 * frame.ml_drone_pct * frame.harmonic_evidence_pct_smoothed) / (
+        frame.ml_drone_pct + frame.harmonic_evidence_pct_smoothed + 1e-6
+    )
+    assert frame.combined_drone_evidence_pct == expected
+    assert frame.combined_drone_evidence_pct >= 0.60
+    assert frame.status == "drone_like"
 
 
 def test_hf_missing_single_channel_keeps_existing_harmonic_behavior():

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+import time
 from urllib.parse import quote
 
 import matplotlib.pyplot as plt
@@ -56,7 +58,78 @@ def format_pct(value: float | None) -> str:
     return f"{float(np.clip(value, 0.0, 1.0)) * 100:.0f}%"
 
 
-def decision_scores(event: dict) -> tuple[float, float | None]:
+def format_age(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    value = max(0.0, float(value))
+    if value < 1.0:
+        return f"{value * 1000:.0f}ms"
+    return f"{value:.1f}s"
+
+
+def format_latency(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    value = max(0.0, float(value))
+    if value < 1.0:
+        return f"{value * 1000:.0f}ms"
+    return f"{value:.2f}s"
+
+
+def format_unix_time(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return datetime.fromtimestamp(float(value)).strftime("%H:%M:%S")
+
+
+def health_badge_label(health: dict | None) -> str:
+    if not health:
+        return "NO HEARTBEAT"
+    state = str(health.get("alive_state") or "offline").upper()
+    if not health.get("heartbeat"):
+        return "NO HEARTBEAT"
+    return state
+
+
+def timing_summary(event: dict | None, health: dict | None = None, now: float | None = None) -> dict[str, str]:
+    now = time.time() if now is None else float(now)
+    event = event or {}
+    metadata = event.get("metadata") or {}
+    server_received = event.get("server_received_unix") or metadata.get("server_received_unix")
+    generated = event.get("timestamp_unix")
+    latency = metadata.get("station_to_server_latency_sec")
+    if latency is None and health:
+        latency = health.get("latency_sec")
+    event_age = None if server_received is None else now - float(server_received)
+    heartbeat_age = None if not health else health.get("heartbeat_age_sec")
+    return {
+        "generated": format_unix_time(generated),
+        "received": format_unix_time(server_received),
+        "event_age": format_age(event_age),
+        "heartbeat_age": format_age(heartbeat_age),
+        "latency": format_latency(latency),
+    }
+
+
+def is_event_stale_for_fusion(event: dict | None, fusion_window_sec: float = 8.0, now: float | None = None) -> bool:
+    if not event:
+        return False
+    now = time.time() if now is None else float(now)
+    metadata = event.get("metadata") or {}
+    server_received = event.get("server_received_unix") or metadata.get("server_received_unix")
+    timestamp = server_received or event.get("timestamp_unix")
+    if timestamp is None:
+        return False
+    return now - float(timestamp) > float(fusion_window_sec)
+
+
+def _combined_score(ml: float | None, harmonic: float | None) -> float:
+    ml_value = float(np.clip(float(ml or 0.0), 0.0, 1.0))
+    harmonic_value = float(np.clip(float(harmonic or 0.0), 0.0, 1.0))
+    return float(np.clip((2.0 * ml_value * harmonic_value) / (ml_value + harmonic_value + 1e-6), 0.0, 1.0))
+
+
+def decision_scores(event: dict) -> tuple[float, float | None, float]:
     harmonic = _score_value(event, "harmonic_evidence_pct_smoothed")
     if harmonic is None:
         harmonic = _score_value(event, "harmonic_evidence_pct")
@@ -65,7 +138,10 @@ def decision_scores(event: dict) -> tuple[float, float | None]:
         ml = _score_value(event, "ml_drone_pct")
     if ml is None:
         ml = _score_value(event, "hf_p_drone")
-    return (harmonic or 0.0), ml
+    combined = _score_value(event, "combined_drone_evidence_pct")
+    if combined is None:
+        combined = _combined_score(ml, harmonic)
+    return (harmonic or 0.0), ml, combined
 
 
 def decision_score_values(event: dict) -> dict[str, float | None]:
@@ -80,7 +156,10 @@ def decision_score_values(event: dict) -> dict[str, float | None]:
         ml = _score_value(event, "ml_drone_pct")
     if ml is None:
         ml = _score_value(event, "hf_p_drone")
-    return {"harmonic_raw": raw, "harmonic_smoothed": smoothed, "ml": ml}
+    combined = _score_value(event, "combined_drone_evidence_pct")
+    if combined is None:
+        combined = _combined_score(ml, smoothed)
+    return {"harmonic_raw": raw, "harmonic_smoothed": smoothed, "ml": ml, "combined": combined}
 
 
 OPERATOR_LABEL_TEXT = {
@@ -102,20 +181,22 @@ def format_operator_label(value: str) -> str:
 
 
 def decision_display_state(event: dict) -> dict[str, str]:
-    harmonic, ml = decision_scores(event)
+    harmonic, ml, combined = decision_scores(event)
     ml_value = ml if ml is not None else 0.0
     label = operator_label(event)
     if label == "alert":
-        return {"label": format_operator_label(label), "harmonic_color": "#dc2626", "ml_color": "#dc2626"}
+        return {"label": format_operator_label(label), "harmonic_color": "#dc2626", "ml_color": "#dc2626", "combined_color": "#dc2626"}
     if label == "drone_like":
-        return {"label": "DRONE-LIKE", "harmonic_color": "#dc2626", "ml_color": "#ea580c"}
+        return {"label": "DRONE-LIKE", "harmonic_color": "#dc2626", "ml_color": "#ea580c", "combined_color": "#dc2626"}
+    if combined >= 0.60:
+        return {"label": "STRONG ML DRONE CANDIDATE", "harmonic_color": "#ea580c", "ml_color": "#2563eb", "combined_color": "#dc2626"}
     if harmonic >= 0.60 and ml_value >= 0.60:
-        return {"label": "ML + harmonic agree", "harmonic_color": "#dc2626", "ml_color": "#ea580c"}
+        return {"label": "ML + harmonic agree", "harmonic_color": "#dc2626", "ml_color": "#ea580c", "combined_color": "#dc2626"}
     if label == "non_drone_harmonic" or (harmonic >= 0.60 and ml_value <= 0.30):
-        return {"label": "NON-DRONE HARMONIC", "harmonic_color": "#ca8a04", "ml_color": "#6b7280"}
+        return {"label": "NON-DRONE HARMONIC", "harmonic_color": "#ca8a04", "ml_color": "#6b7280", "combined_color": "#6b7280"}
     if label == "ml_drone_candidate" or (ml_value >= 0.60 and harmonic <= 0.30):
-        return {"label": "ML DRONE CANDIDATE", "harmonic_color": "#a3a3a3", "ml_color": "#2563eb"}
-    return {"label": "background", "harmonic_color": "#16a34a", "ml_color": "#22c55e"}
+        return {"label": "ML DRONE CANDIDATE", "harmonic_color": "#a3a3a3", "ml_color": "#2563eb", "combined_color": "#ca8a04"}
+    return {"label": "background", "harmonic_color": "#16a34a", "ml_color": "#22c55e", "combined_color": "#16a34a"}
 
 
 def render_decision_bars(st_module, event: dict) -> None:
@@ -123,6 +204,7 @@ def render_decision_bars(st_module, event: dict) -> None:
     harmonic_raw = scores["harmonic_raw"] or 0.0
     harmonic_smoothed = scores["harmonic_smoothed"] or 0.0
     ml = scores["ml"]
+    combined = scores["combined"] or 0.0
     display = decision_display_state(event)
     ml_width = 0.0 if ml is None else ml
     reason = event.get("decision_reason") or (event.get("metadata") or {}).get("decision_reason")
@@ -135,6 +217,8 @@ def render_decision_bars(st_module, event: dict) -> None:
   <div class="sky-score-track"><div style="width:{harmonic_smoothed * 100:.0f}%;background:{display['harmonic_color']};"></div></div>
   <div class="sky-score-row"><span>ML drone probability</span><b>{format_pct(ml)}</b></div>
   <div class="sky-score-track"><div style="width:{ml_width * 100:.0f}%;background:{display['ml_color']};"></div></div>
+  <div class="sky-score-row"><span>Combined drone evidence</span><b>{format_pct(combined)}</b></div>
+  <div class="sky-score-track"><div style="width:{combined * 100:.0f}%;background:{display['combined_color']};"></div></div>
   {reason_html}
 </div>
 <style>

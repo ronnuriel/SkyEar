@@ -5,7 +5,18 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from dashboard.station_view import plot_spectrogram_figure, plot_spectrum_figure, render_decision_bars, status_label
+from dashboard.station_view import (
+    health_badge_label,
+    is_event_stale_for_fusion,
+    plot_spectrogram_figure,
+    plot_spectrum_figure,
+    render_decision_bars,
+    status_label,
+    timing_summary,
+)
+
+
+FUSION_WINDOW_SEC = 8.0
 
 
 def _query_param(name: str, default: str) -> str:
@@ -48,9 +59,11 @@ refresh_sec = st.sidebar.number_input(
 
 try:
     latest_by_station = requests.get(f"{server_url}/stations/latest", timeout=2).json()
+    health_by_station = requests.get(f"{server_url}/stations/health", timeout=2).json()
 except Exception as e:
     st.error(f"Could not load station data: {e}")
     latest_by_station = {}
+    health_by_station = {}
 
 station_ids = sorted(latest_by_station.keys())
 station_id = _select_station(default_station_id, station_ids)
@@ -69,6 +82,16 @@ else:
     status = event.get("status", "background")
     label, kind = status_label(status)
     getattr(st, kind)(label)
+    health = health_by_station.get(station_id)
+    timing = timing_summary(event, health)
+    st.caption(
+        f"{health_badge_label(health)} | "
+        f"Generated: {timing['generated']} | Received: {timing['received']} | "
+        f"Event age: {timing['event_age']} | Latency: {timing['latency']} | "
+        f"Fusion window: {FUSION_WINDOW_SEC:.0f}s"
+    )
+    if is_event_stale_for_fusion(event, FUSION_WINDOW_SEC):
+        st.warning("Latest station event is stale for fusion")
     render_decision_bars(st, event)
 
     cols = st.columns(6)
@@ -85,8 +108,7 @@ else:
     detail_cols[0].metric("Strongest ch", event.get("strongest_channel") if event.get("strongest_channel") is not None else "n/a")
     detail_cols[1].metric("RMS", f"{float(event.get('rms') or 0.0):.4f}")
     detail_cols[2].metric("Duration", f"{float(event.get('duration_sec') or 0.0):.1f}s")
-    age = time.time() - float(event.get("timestamp_unix") or time.time())
-    detail_cols[3].metric("Age", f"{age:.1f}s")
+    detail_cols[3].metric("Age", timing["event_age"])
 
     if metadata.get("demo_phase"):
         st.info(f"Demo phase: {metadata['demo_phase']}")

@@ -5,7 +5,18 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from dashboard.station_view import external_spectrum_app_url, plot_spectrum_figure, render_decision_bars, status_label
+from dashboard.station_view import (
+    external_spectrum_app_url,
+    health_badge_label,
+    is_event_stale_for_fusion,
+    plot_spectrum_figure,
+    render_decision_bars,
+    status_label,
+    timing_summary,
+)
+
+
+FUSION_WINDOW_SEC = 8.0
 
 
 def _draw_status(status: str):
@@ -13,9 +24,22 @@ def _draw_status(status: str):
     getattr(st, kind)(label)
 
 
+def _draw_health_badge(health: dict | None):
+    label = health_badge_label(health)
+    if label == "ONLINE":
+        st.success(label)
+    elif label == "STALE":
+        st.warning(label)
+    elif label == "NO HEARTBEAT":
+        st.warning(label)
+    else:
+        st.error(label)
+
+
 def _render_station_card(
     station_id: str,
     event: dict,
+    health: dict | None,
     fusion_level: int,
     server_url: str,
     spectrum_app_url: str,
@@ -28,10 +52,25 @@ def _render_station_card(
     demo_phase = metadata.get("demo_phase")
 
     with st.container(border=True):
-        st.markdown(f"### {station_id}")
+        header_cols = st.columns([2, 1])
+        header_cols[0].markdown(f"### {station_id}")
+        with header_cols[1]:
+            _draw_health_badge(health)
         if station_name:
-            st.caption(station_name)
+            header_cols[0].caption(station_name)
         _draw_status(status)
+        timing = timing_summary(event, health)
+        timing_cols = st.columns(4)
+        timing_cols[0].metric("Last heartbeat", timing["heartbeat_age"])
+        timing_cols[1].metric("Last event", timing["event_age"])
+        timing_cols[2].metric("Latency", timing["latency"])
+        timing_cols[3].metric("Received", timing["received"])
+        st.caption(
+            f"Generated: {timing['generated']} | Received: {timing['received']} | "
+            f"Fusion window: {FUSION_WINDOW_SEC:.0f}s"
+        )
+        if is_event_stale_for_fusion(event, FUSION_WINDOW_SEC):
+            st.warning("Latest station event is stale for fusion")
         if demo_phase:
             st.caption(f"Demo phase: {demo_phase}")
         render_decision_bars(st, event)
@@ -111,7 +150,13 @@ except Exception as e:
 st.subheader("Stations")
 try:
     latest_by_station = requests.get(f"{server_url}/stations/latest", timeout=2).json()
+    health_by_station = requests.get(f"{server_url}/stations/health", timeout=2).json()
     station_events = sorted(latest_by_station.items())
+    heartbeat_only = sorted(
+        (station_id, health)
+        for station_id, health in health_by_station.items()
+        if station_id not in latest_by_station
+    )
     if not station_events:
         st.info("No station events yet.")
 
@@ -123,11 +168,26 @@ try:
                 _render_station_card(
                     station_id,
                     event,
+                    health_by_station.get(station_id),
                     fusion_level,
                     server_url,
                     spectrum_app_url,
                     show_inline_mini_spectrum,
                 )
+    if heartbeat_only:
+        st.subheader("Online stations without recent events")
+        for start in range(0, len(heartbeat_only), max_stations_per_row):
+            row_items = heartbeat_only[start : start + max_stations_per_row]
+            columns = st.columns(len(row_items))
+            for column, (station_id, health) in zip(columns, row_items):
+                with column:
+                    with st.container(border=True):
+                        st.markdown(f"### {station_id}")
+                        _draw_health_badge(health)
+                        timing = timing_summary(None, health)
+                        st.metric("Last heartbeat", timing["heartbeat_age"])
+                        st.metric("Latency", timing["latency"])
+                        st.caption("Station is online/background; no acoustic event received yet.")
 except Exception as e:
     st.error(f"Could not load stations: {e}")
 

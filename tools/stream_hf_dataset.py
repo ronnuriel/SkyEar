@@ -10,10 +10,11 @@ import numpy as np
 import requests
 from scipy.signal import resample_poly
 
-from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
+from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
 from station.audio_capture import to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.hf_detector import DEFAULT_MODEL_ID, HFDetector
+from station.station_agent import heartbeat_url_from_events_url
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
 
@@ -206,6 +207,7 @@ def build_event(
         f0_family_stable=frame.f0_family_stable,
         ml_drone_pct=frame.ml_drone_pct,
         ml_drone_pct_smoothed=frame.ml_drone_pct_smoothed,
+        combined_drone_evidence_pct=frame.combined_drone_evidence_pct,
         hf_p_drone=hf_p_drone,
         hf_negative=frame.hf_negative,
         hf_positive=frame.hf_positive,
@@ -243,6 +245,7 @@ def build_event(
             "harmonic_evidence_pct_smoothed": frame.harmonic_evidence_pct_smoothed,
             "ml_drone_pct": frame.ml_drone_pct,
             "ml_drone_pct_smoothed": frame.ml_drone_pct_smoothed,
+            "combined_drone_evidence_pct": frame.combined_drone_evidence_pct,
             "hf_negative": frame.hf_negative,
             "hf_positive": frame.hf_positive,
             "decision_reason": frame.decision_reason,
@@ -254,6 +257,34 @@ def build_event(
             **spectrum,
             **spectrogram,
             "harmonic_lines": harmonic_lines,
+        },
+    )
+
+
+def build_heartbeat(event: AcousticEvent, timestamp: float, sample_rate: int) -> StationHeartbeat:
+    metadata = event.metadata or {}
+    hf_error = metadata.get("hf_error")
+    return StationHeartbeat(
+        station_id=event.station_id,
+        station_name=event.station_name,
+        timestamp_unix=timestamp,
+        status="error" if hf_error else "online",
+        station_location=event.station_location,
+        audio_device="huggingface_dataset",
+        sample_rate=sample_rate,
+        channels=event.channel_count,
+        calibrated=event.calibrated,
+        detector_version=DETECTOR_VERSION,
+        station_mode=event.station_mode,
+        last_event_status=event.status.value if hasattr(event.status, "value") else str(event.status),
+        last_harmonic_score=event.harmonic_score,
+        last_hf_p_drone=event.hf_p_drone,
+        last_error=hf_error,
+        errors=[hf_error] if hf_error else [],
+        metadata={
+            "source": "huggingface_dataset",
+            "dataset_id": metadata.get("dataset_id"),
+            "dataset_config": metadata.get("dataset_config"),
         },
     )
 
@@ -357,6 +388,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--background-config")
     parser.add_argument("--background-split", default="train")
     parser.add_argument("--background-samples", type=int, default=20)
+    parser.add_argument("--heartbeat", action="store_true")
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0)
     return parser.parse_args()
 
 
@@ -377,6 +410,8 @@ def run(args: argparse.Namespace) -> None:
     audio_column = None
     windows_sent = 0
     samples_seen = 0
+    last_heartbeat = 0.0
+    heartbeat_url = heartbeat_url_from_events_url(args.server)
 
     for dataset_idx, example in enumerate(dataset):
         if samples_seen >= int(args.max_samples):
@@ -426,6 +461,10 @@ def run(args: argparse.Namespace) -> None:
             distance = file_metadata.get("distance_m")
             distance_display = f"{distance:g}m" if distance is not None else "None"
             requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
+            if args.heartbeat and loop_start - last_heartbeat >= float(args.heartbeat_interval):
+                heartbeat = build_heartbeat(event, loop_start, int(args.sample_rate))
+                requests.post(heartbeat_url, json=heartbeat.model_dump(mode="json"), timeout=2.0)
+                last_heartbeat = loop_start
             print(
                 f"{dataset_idx} {label} {event.status:11s} "
                 f"hf_p={event.hf_p_drone} harm={event.harmonic_score:.1f} "
