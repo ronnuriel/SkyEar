@@ -1,6 +1,13 @@
+# station:
+#   station_id: station_001
+#   name: Home Mac Test Node
+#   latitude: 32.0853
+#   longitude: 34.7818
+#   altitude_m: 20.0
+
 station:
   station_id: station_001
-  name: Home Mac Test Node
+  name: Home Mac Test Node2
   latitude: 32.0853
   longitude: 34.7818
   altitude_m: 20.0

@@ -32,3 +32,29 @@ def get_alerts(limit: int = 50):
 def get_fusion():
     alert: FusedAlert = fuse_events(db.recent_events(limit=200))
     return alert.model_dump(mode="json")
+
+@app.get("/stations/latest")
+def get_latest_by_station():
+    return {
+        station_id: event.model_dump(mode="json")
+        for station_id, event in db.latest_by_station().items()
+    }
+
+@app.get("/stations/summary")
+def get_station_summary():
+    return [
+        {
+            "station_id": event.station_id,
+            "station_name": event.station_name,
+            "status": event.status.value,
+            "confidence": event.confidence,
+            "harmonic_score": event.harmonic_score,
+            "best_f0_hz": event.best_f0_hz,
+            "channel_agreement_count": event.channel_agreement_count,
+            "channel_count": event.channel_count,
+            "strongest_channel": event.strongest_channel,
+            "calibrated": event.calibrated,
+            "timestamp_unix": event.timestamp_unix,
+        }
+        for event in db.latest_by_station().values()
+    ]

@@ -10,7 +10,7 @@ from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
 from station.audio_capture import audio_blocks, list_input_devices, to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
-from station.spectrum import compute_harmonic_lines, compute_spectrum_summary
+from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
 DETECTOR_VERSION = "station-detector-state-v1"
 
@@ -71,16 +71,26 @@ def main():
         window_sec=float(audio_cfg["window_sec"]),
     ):
         now = time.time()
-        frame = detector_state.update(audio, int(audio_cfg["sample_rate"]), now)
+        sample_rate = int(audio_cfg["sample_rate"])
+        frame = detector_state.update(audio, sample_rate, now)
         mono = to_mono(audio)
+        max_freq = int(det_cfg.get("max_freq", 7000))
         spectrum = compute_spectrum_summary(
             mono,
-            int(audio_cfg["sample_rate"]),
-            max_freq=int(det_cfg.get("max_freq", 7000)),
+            sample_rate,
+            max_freq=max_freq,
+            n_points=300,
+        )
+        spectrogram = compute_spectrogram_summary(
+            mono,
+            sample_rate,
+            max_freq=min(5000, max_freq),
+            n_freq_bins=96,
+            n_time_bins=64,
         )
         harmonic_lines = compute_harmonic_lines(
             frame.best_f0_hz,
-            int(spectrum["spectrum_max_freq_hz"]),
+            max_freq,
         )
 
         azimuth, direction_confidence = None, None
@@ -125,6 +135,7 @@ def main():
                 "suspect_threshold": frame.suspect_threshold,
                 "alert_threshold": frame.alert_threshold,
                 **spectrum,
+                **spectrogram,
                 "harmonic_lines": harmonic_lines,
             },
         )

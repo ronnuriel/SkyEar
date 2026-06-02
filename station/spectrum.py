@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.signal import spectrogram
 
 
 def compute_spectrum_summary(
@@ -43,10 +44,77 @@ def compute_spectrum_summary(
         freqs = freqs[idx]
         db = db[idx]
 
+    db = db - float(np.max(db))
+
     return {
         "spectrum_freqs_hz": [float(item) for item in freqs],
         "spectrum_db": [float(item) for item in db],
         "spectrum_max_freq_hz": max_freq,
+    }
+
+
+def compute_spectrogram_summary(
+    audio_mono: np.ndarray,
+    sr: int,
+    max_freq: int = 5000,
+    n_freq_bins: int = 96,
+    n_time_bins: int = 64,
+) -> dict[str, list[float] | list[list[float]]]:
+    audio = np.asarray(audio_mono, dtype=np.float32).reshape(-1)
+    max_freq = int(max_freq)
+    if audio.size == 0 or sr <= 0 or n_freq_bins <= 0 or n_time_bins <= 0:
+        return {
+            "spectrogram_freqs_hz": [],
+            "spectrogram_times_sec": [],
+            "spectrogram_db": [],
+        }
+
+    audio = audio - float(np.mean(audio))
+    nperseg = min(1024, max(128, audio.size))
+    noverlap = nperseg // 2
+    freqs, times, power = spectrogram(
+        audio,
+        fs=sr,
+        window="hann",
+        nperseg=nperseg,
+        noverlap=noverlap,
+        mode="magnitude",
+        scaling="spectrum",
+    )
+
+    max_freq = min(max_freq, int(sr // 2))
+    keep = freqs <= max_freq
+    freqs = freqs[keep]
+    power = power[keep, :]
+
+    if freqs.size == 0 or times.size == 0:
+        return {
+            "spectrogram_freqs_hz": [],
+            "spectrogram_times_sec": [],
+            "spectrogram_db": [],
+        }
+
+    db = 20 * np.log10(np.maximum(power, 1e-12))
+    db = db - float(np.max(db))
+    db = np.clip(db, -90.0, 0.0)
+
+    if freqs.size > n_freq_bins:
+        freq_idx = np.linspace(0, freqs.size - 1, n_freq_bins).astype(int)
+        freqs = freqs[freq_idx]
+        db = db[freq_idx, :]
+
+    if times.size > n_time_bins:
+        time_idx = np.linspace(0, times.size - 1, n_time_bins).astype(int)
+        times = times[time_idx]
+        db = db[:, time_idx]
+
+    db = db - float(np.max(db))
+    db = np.clip(db, -90.0, 0.0)
+
+    return {
+        "spectrogram_freqs_hz": [float(item) for item in freqs],
+        "spectrogram_times_sec": [float(item) for item in times],
+        "spectrogram_db": [[float(value) for value in row] for row in db],
     }
 
 

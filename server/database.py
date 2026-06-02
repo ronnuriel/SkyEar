@@ -19,4 +19,10 @@ class InMemoryDatabase:
     def recent_alerts(self, limit: int = 100):
         return list(self.alerts)[-limit:]
 
+    def latest_by_station(self) -> dict[str, AcousticEvent]:
+        latest: dict[str, AcousticEvent] = {}
+        for event in self.events:
+            latest[event.station_id] = event
+        return latest
+
 db = InMemoryDatabase()

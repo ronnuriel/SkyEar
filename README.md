@@ -17,6 +17,8 @@ The server fuses events from multiple stations, tracks alert levels, and exposes
 
 ## Run MVP locally
 
+python -m station.station_agent --list-devices
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
