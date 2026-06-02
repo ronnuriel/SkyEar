@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from collections.abc import Iterable, Iterator
 from typing import Any
@@ -63,6 +64,48 @@ def resample_mono(mono: np.ndarray, source_sr: int, target_sr: int) -> np.ndarra
     except Exception:
         gcd = int(np.gcd(source_sr, target_sr))
         return resample_poly(mono, target_sr // gcd, source_sr // gcd).astype(np.float32)
+
+
+def detector_config_from_args(args: argparse.Namespace) -> StationDetectorStateConfig:
+    return StationDetectorStateConfig(
+        f0_min=int(args.f0_min),
+        f0_max=int(args.f0_max),
+        max_freq=int(args.max_freq),
+        min_suspect_threshold=float(args.suspect_threshold),
+        min_alert_threshold=float(args.alert_threshold),
+        calibration_seconds=float(args.calibration_seconds),
+    )
+
+
+def parse_file_path_metadata(file_path: str | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"dataset_file_path": file_path}
+    if not file_path:
+        return metadata
+
+    parts = str(file_path).split("/")
+    for part in parts:
+        drone_match = re.fullmatch(r"(drone[^-/]+)(?:-.*)?", part)
+        if drone_match:
+            metadata["drone_id"] = drone_match.group(1)
+
+        distance_match = re.search(r"mic-dist-([0-9.]+)(cm|m)", part)
+        if distance_match:
+            value = float(distance_match.group(1))
+            unit = distance_match.group(2)
+            metadata["distance_label"] = f"{distance_match.group(1)}{unit}"
+            metadata["distance_m"] = value / 100.0 if unit == "cm" else value
+
+        throttle_match = re.fullmatch(r"throttle-([^/]+)", part)
+        if throttle_match:
+            metadata["throttle"] = throttle_match.group(1)
+
+    filename = parts[-1] if parts else ""
+    mic_match = re.match(r"(mic\d+)_([^/]+?)(?:-File|\.)", filename)
+    if mic_match:
+        metadata["mic_id"] = mic_match.group(1)
+        metadata["array_info"] = mic_match.group(2)
+
+    return metadata
 
 
 def find_audio_column(example: dict[str, Any]) -> str:
@@ -130,6 +173,7 @@ def build_event(
     detector_state: StationDetectorState,
     hf_result: Any = None,
     hf_p_drone: float | None = None,
+    file_metadata: dict[str, Any] | None = None,
 ) -> AcousticEvent:
     frame = detector_state.update(audio, sample_rate, timestamp, hf_p_drone=hf_p_drone)
     mono = to_mono(audio)
@@ -143,6 +187,7 @@ def build_event(
         n_time_bins=64,
     )
     harmonic_lines = compute_harmonic_lines(frame.best_f0_hz, max_freq)
+    file_metadata = file_metadata or {}
 
     return AcousticEvent(
         station_id=station_id,
@@ -180,6 +225,7 @@ def build_event(
             "hf_label": getattr(hf_result, "label", None),
             "hf_class_probs": getattr(hf_result, "class_probs", {}) if hf_result is not None else {},
             "hf_error": getattr(hf_result, "error", None),
+            **file_metadata,
             **spectrum,
             **spectrogram,
             "harmonic_lines": harmonic_lines,
@@ -209,6 +255,47 @@ def resolve_dataset_options(dataset_id: str, config_name: str | None, split: str
     return resolved_config, resolved_split
 
 
+def calibrate_with_background(args: argparse.Namespace, detector_state: StationDetectorState) -> None:
+    if not args.background_dataset:
+        return
+
+    background_config, background_split = resolve_dataset_options(
+        args.background_dataset,
+        args.background_config,
+        args.background_split,
+    )
+    dataset = load_dataset_iterable(
+        args.background_dataset,
+        background_split,
+        args.streaming,
+        config_name=background_config,
+    )
+    audio_column = None
+    samples_seen = 0
+    timestamp = time.time()
+
+    for example in dataset:
+        if samples_seen >= int(args.background_samples):
+            break
+        if audio_column is None:
+            audio_column = find_audio_column(example)
+
+        mono, source_sr, _ = extract_mono_audio(example, audio_column)
+        mono = resample_mono(mono, source_sr, int(args.sample_rate))
+        samples_seen += 1
+
+        for window in iter_audio_windows(mono, int(args.sample_rate), float(args.window_sec)):
+            audio = mono_to_simulated_channels(window, int(args.channels))
+            detector_state.update(audio, int(args.sample_rate), timestamp)
+            timestamp += float(args.window_sec)
+
+    print(
+        "background calibration "
+        f"samples={samples_seen} calibrated={detector_state.calibrated} "
+        f"th={detector_state.suspect_threshold:.1f}/{detector_state.alert_threshold:.1f}"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -230,11 +317,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int, default=44100)
     parser.add_argument("--max-samples", type=int, default=50)
     parser.add_argument("--max-windows", type=int, default=None, help="Optional cap on total posted audio windows.")
+    parser.add_argument("--calibration-seconds", type=float, default=0.0)
+    parser.add_argument("--suspect-threshold", type=float, default=16.0)
+    parser.add_argument("--alert-threshold", type=float, default=22.0)
+    parser.add_argument("--f0-min", type=int, default=500)
+    parser.add_argument("--f0-max", type=int, default=2200)
+    parser.add_argument("--max-freq", type=int, default=7000)
     parser.add_argument("--realtime", action="store_true")
     parser.add_argument("--label-filter")
     parser.add_argument("--streaming", action="store_true")
     parser.add_argument("--hf", action="store_true")
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
+    parser.add_argument("--background-dataset")
+    parser.add_argument("--background-config")
+    parser.add_argument("--background-split", default="train")
+    parser.add_argument("--background-samples", type=int, default=20)
     return parser.parse_args()
 
 
@@ -243,7 +340,13 @@ def run(args: argparse.Namespace) -> None:
 
     dataset = load_dataset_iterable(args.dataset, dataset_split, args.streaming, config_name=dataset_config)
     features = getattr(dataset, "features", None)
-    detector_state = StationDetectorState(StationDetectorStateConfig())
+    detector_config = detector_config_from_args(args)
+    detector_state = StationDetectorState(detector_config)
+    if args.background_dataset:
+        calibrate_with_background(args, detector_state)
+    elif detector_config.calibration_seconds <= 0.0:
+        detector_state.calibrated = True
+
     hf_detector = HFDetector(model_id=args.model_id) if args.hf else None
     last_hf_result = None
     audio_column = None
@@ -267,6 +370,10 @@ def run(args: argparse.Namespace) -> None:
 
         mono, source_sr, _ = extract_mono_audio(example, audio_column)
         mono = resample_mono(mono, source_sr, int(args.sample_rate))
+        file_path = example.get("file_path")
+        if not file_path and isinstance(example.get(audio_column), dict):
+            file_path = example[audio_column].get("path")
+        file_metadata = parse_file_path_metadata(file_path)
         samples_seen += 1
 
         for window in iter_audio_windows(mono, int(args.sample_rate), float(args.window_sec)):
@@ -289,12 +396,16 @@ def run(args: argparse.Namespace) -> None:
                 detector_state=detector_state,
                 hf_result=last_hf_result,
                 hf_p_drone=hf_p_drone,
+                file_metadata=file_metadata,
             )
+            distance = file_metadata.get("distance_m")
+            distance_display = f"{distance:g}m" if distance is not None else "None"
             requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
             print(
                 f"{dataset_idx} {label} {event.status:11s} "
                 f"hf_p={event.hf_p_drone} harm={event.harmonic_score:.1f} "
-                f"f0={event.best_f0_hz} agree={event.channel_agreement_count}/{event.channel_count}"
+                f"f0={event.best_f0_hz} dist={distance_display} "
+                f"throttle={file_metadata.get('throttle')} drone={file_metadata.get('drone_id')}"
             )
             windows_sent += 1
             if args.realtime:

@@ -2,27 +2,127 @@ from __future__ import annotations
 import time
 from shared.event_schema import AcousticEvent, FusedAlert
 
+
+BACKGROUND_STATUSES = {"background", "calibrating"}
+
+
+def _event_status(event: AcousticEvent) -> str:
+    return str(event.status.value if hasattr(event.status, "value") else event.status)
+
+
+def _thresholds(event: AcousticEvent) -> tuple[float, float]:
+    metadata = event.metadata or {}
+    suspect = float(metadata.get("suspect_threshold") or 16.0)
+    alert = float(metadata.get("alert_threshold") or 22.0)
+    if alert <= suspect:
+        alert = suspect + 1.0
+    return suspect, alert
+
+
+def _harmonic_norm(event: AcousticEvent, suspect_threshold: float, alert_threshold: float) -> float:
+    value = (float(event.harmonic_score or 0.0) - suspect_threshold) / (alert_threshold - suspect_threshold)
+    return float(max(0.0, min(1.0, value)))
+
+
+def _is_near_threshold_background(event: AcousticEvent, suspect_threshold: float) -> bool:
+    hf = float(event.hf_p_drone or 0.0)
+    harmonic = float(event.harmonic_score or 0.0)
+    return hf >= 0.90 and harmonic >= suspect_threshold * 0.85
+
+
+def station_evidence_score(event: AcousticEvent) -> float:
+    status = _event_status(event)
+    suspect_threshold, alert_threshold = _thresholds(event)
+    if status in BACKGROUND_STATUSES and not _is_near_threshold_background(event, suspect_threshold):
+        return 0.0
+
+    harmonic_norm = _harmonic_norm(event, suspect_threshold, alert_threshold)
+    hf = float(event.hf_p_drone or 0.0)
+    local_conf = float(event.confidence or 0.0)
+    score = 0.45 * local_conf + 0.30 * hf + 0.25 * harmonic_norm
+
+    if status == "suspect":
+        score += 0.15
+    elif status == "drone_like":
+        score += 0.35
+    elif status == "alert":
+        score += 0.55
+
+    metadata = event.metadata or {}
+    if bool(metadata.get("f0_stable")):
+        score += 0.10
+    if int(event.channel_agreement_count or 0) >= 2:
+        score += 0.10
+
+    return float(max(0.0, min(1.0, score)))
+
+
+def _latest_by_station(events: list[AcousticEvent]) -> list[AcousticEvent]:
+    latest: dict[str, AcousticEvent] = {}
+    for event in events:
+        existing = latest.get(event.station_id)
+        if existing is None or event.timestamp_unix >= existing.timestamp_unix:
+            latest[event.station_id] = event
+    return list(latest.values())
+
+
+def _same_f0_detected(events: list[AcousticEvent]) -> bool:
+    f0s = [float(event.best_f0_hz) for event in events if event.best_f0_hz]
+    for idx, left in enumerate(f0s):
+        for right in f0s[idx + 1 :]:
+            if abs(left - right) <= 120.0:
+                return True
+            if abs(left * 2.0 - right) <= 120.0:
+                return True
+            if abs(left - right * 2.0) <= 120.0:
+                return True
+    return False
+
+
 def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: float = 8.0) -> FusedAlert:
     now = time.time()
     recent = [e for e in events if now - e.timestamp_unix <= window_sec]
-    suspect_or_more = [e for e in recent if e.status in {"suspect", "drone_like", "alert"}]
-    alerts = [e for e in recent if e.status == "alert"]
+    latest_events = _latest_by_station(recent)
+    scored = [(event, station_evidence_score(event)) for event in latest_events]
+    active = [(event, score) for event, score in scored if score > 0.0]
 
-    suspect_stations = {e.station_id for e in suspect_or_more}
-    alert_stations = {e.station_id for e in alerts}
+    active_events = [event for event, _ in active]
+    active_station_count = len(active_events)
+    total_score = sum(score for _, score in active)
+    same_f0 = _same_f0_detected(active_events)
+    if same_f0 and active_station_count >= 2:
+        total_score += 0.15
 
-    if len(alert_stations) >= 2:
-        level, reason = 3, "Two or more stations reported alert-level rotor evidence."
-    elif len(alerts) >= 1 or len(suspect_stations) >= 2:
-        level, reason = 2, "One alert station or multiple suspect stations."
-    elif len(suspect_or_more) >= 1:
-        level, reason = 1, "One station reported suspect rotor evidence."
+    local_alert_count = sum(1 for event in active_events if _event_status(event) == "alert")
+    drone_like_or_alert_count = sum(1 for event in active_events if _event_status(event) in {"drone_like", "alert"})
+    suspect_count = sum(1 for event in active_events if _event_status(event) == "suspect")
+    weak_station_count = sum(1 for _, score in active if score >= 0.45)
+
+    if (total_score >= 2.0 and active_station_count >= 2) or drone_like_or_alert_count >= 2 or (
+        suspect_count >= 3 and same_f0
+    ):
+        level = 3
+    elif total_score >= 1.2 or weak_station_count >= 2 or local_alert_count >= 1:
+        level = 2
+    elif total_score >= 0.6:
+        level = 1
     else:
-        level, reason = 0, "No recent acoustic evidence."
+        level = 0
 
-    confidence = max([float(e.confidence) for e in suspect_or_more], default=0.0)
-    if len(suspect_stations) >= 2:
-        confidence = min(1.0, confidence + 0.15)
+    max_hf = max([float(event.hf_p_drone or 0.0) for event in active_events], default=0.0)
+    mean_harmonic = (
+        sum(float(event.harmonic_score or 0.0) for event in active_events) / active_station_count
+        if active_station_count
+        else 0.0
+    )
+    reason = (
+        "network acoustic confirmation candidate; "
+        f"active_stations={active_station_count}, max_hf_p_drone={max_hf:.2f}, "
+        f"mean_harmonic={mean_harmonic:.1f}, same_f0={'yes' if same_f0 else 'no'}, "
+        f"local_alerts={local_alert_count}, total_score={total_score:.2f}"
+    )
+
+    confidence = float(max(0.0, min(1.0, total_score / 2.0)))
 
     return FusedAlert(
         timestamp_unix=now,
@@ -30,5 +130,5 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
         status=f"LEVEL_{level}",
         confidence=confidence,
         reason=reason,
-        events_used=suspect_or_more[-10:],
+        events_used=active_events[-10:],
     )

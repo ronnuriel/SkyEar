@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
@@ -11,6 +13,8 @@ from tools.stream_hf_dataset import (
     dataset_label,
     iter_audio_windows,
     mono_to_simulated_channels,
+    parse_args,
+    parse_file_path_metadata,
     resolve_dataset_options,
 )
 
@@ -55,6 +59,27 @@ def test_dataset_label_uses_data_type_column():
     assert dataset_label({"data_type": "drone-only"}, fallback="fallback") == "drone-only"
 
 
+def test_parse_file_path_metadata_extracts_dataset_context():
+    metadata = parse_file_path_metadata(
+        "drone-only-recordings/drone2-only/mic-dist-50cm/throttle-low/mic2_8array-down-File3.wav"
+    )
+
+    assert metadata["distance_m"] == 0.5
+    assert metadata["distance_label"] == "50cm"
+    assert metadata["throttle"] == "low"
+    assert metadata["drone_id"] == "drone2"
+    assert metadata["mic_id"] == "mic2"
+    assert metadata["array_info"] == "8array-down"
+
+
+def test_parse_args_calibration_seconds_defaults_to_zero(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["stream_hf_dataset.py"])
+
+    args = parse_args()
+
+    assert args.calibration_seconds == 0.0
+
+
 def test_event_metadata_contains_dataset_context_without_raw_audio():
     sample_rate = 44100
     mono = np.zeros(sample_rate, dtype=np.float32)
@@ -71,6 +96,9 @@ def test_event_metadata_contains_dataset_context_without_raw_audio():
         sample_rate=sample_rate,
         timestamp=1.0,
         detector_state=detector_state,
+        file_metadata=parse_file_path_metadata(
+            "drone-only-recordings/drone2-only/mic-dist-50cm/throttle-low/mic2_8array-down-File3.wav"
+        ),
     )
 
     assert event.metadata["source"] == "huggingface_dataset"
@@ -78,6 +106,12 @@ def test_event_metadata_contains_dataset_context_without_raw_audio():
     assert event.metadata["dataset_config"] == "drone-only"
     assert event.metadata["dataset_label"] == "drone"
     assert event.metadata["dataset_index"] == 7
+    assert event.metadata["dataset_file_path"].endswith("mic2_8array-down-File3.wav")
+    assert event.metadata["distance_m"] == 0.5
+    assert event.metadata["throttle"] == "low"
+    assert event.metadata["drone_id"] == "drone2"
+    assert event.metadata["mic_id"] == "mic2"
+    assert event.metadata["array_info"] == "8array-down"
     assert event.metadata["mic_sync_mode"] == "unsynchronized"
     assert event.station_mode == "unsynchronized_multimic_voting"
     assert not _metadata_has_key(event.metadata, {"audio", "array", "raw_audio", "waveform"})
