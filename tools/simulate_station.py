@@ -192,6 +192,24 @@ def build_event(
     )
 
 
+def _scenario_metadata(args: argparse.Namespace) -> dict:
+    metadata = {
+        "scenario_id": args.scenario_id or args.scenario,
+        "simulated_source_id": args.simulated_source_id or f"{args.scenario}_source_001",
+    }
+    if args.coverage_radius_m is not None:
+        metadata["coverage_radius_m"] = float(args.coverage_radius_m)
+    if args.true_source_latitude is not None:
+        metadata["true_source_latitude"] = float(args.true_source_latitude)
+    if args.true_source_longitude is not None:
+        metadata["true_source_longitude"] = float(args.true_source_longitude)
+    if args.true_source_distance_m is not None:
+        metadata["true_source_distance_m"] = float(args.true_source_distance_m)
+    if args.true_source_bearing_deg is not None:
+        metadata["true_source_bearing_deg"] = float(args.true_source_bearing_deg)
+    return metadata
+
+
 def build_heartbeat(station: SimulatedStation, event: AcousticEvent, timestamp: float, sample_rate: int) -> StationHeartbeat:
     return StationHeartbeat(
         station_id=station.station_id,
@@ -254,7 +272,13 @@ def run_simulation(args: argparse.Namespace) -> None:
                 station_index=station.station_index,
                 strength=station.strength,
             )
-            event = build_event(station, audio, args.sample_rate, loop_start)
+            event = build_event(
+                station,
+                audio,
+                args.sample_rate,
+                loop_start,
+                metadata_extra=_scenario_metadata(args),
+            )
             requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
             if args.heartbeat and loop_start - last_heartbeat_by_station.get(station.station_id, 0.0) >= args.heartbeat_interval:
                 heartbeat = build_heartbeat(station, event, loop_start, args.sample_rate)
@@ -297,6 +321,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-stations", type=int, default=1)
     parser.add_argument("--heartbeat", action="store_true")
     parser.add_argument("--heartbeat-interval", type=float, default=5.0)
+    parser.add_argument("--scenario-id")
+    parser.add_argument("--simulated-source-id")
+    parser.add_argument("--coverage-radius-m", type=float)
+    parser.add_argument("--true-source-latitude", type=float)
+    parser.add_argument("--true-source-longitude", type=float)
+    parser.add_argument("--true-source-distance-m", type=float)
+    parser.add_argument("--true-source-bearing-deg", type=float)
     return parser.parse_args()
 
 

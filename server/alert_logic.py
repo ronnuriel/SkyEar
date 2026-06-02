@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 import time
 from shared.event_schema import AcousticEvent, FusedAlert
 
@@ -139,6 +140,61 @@ def _same_f0_detected(events: list[AcousticEvent]) -> bool:
     return False
 
 
+def _metadata_value(event: AcousticEvent, key: str):
+    return (event.metadata or {}).get(key)
+
+
+def _scenario_key(event: AcousticEvent) -> tuple[str, str] | None:
+    scenario_id = _metadata_value(event, "scenario_id")
+    source_id = _metadata_value(event, "simulated_source_id")
+    if scenario_id and source_id:
+        return str(scenario_id), str(source_id)
+    return None
+
+
+def _shared_scenario_source(events: list[AcousticEvent]) -> bool:
+    keys = [_scenario_key(event) for event in events]
+    keys = [key for key in keys if key is not None]
+    return len(keys) >= 2 and len(set(keys)) == 1
+
+
+def _coverage_radius_m(event: AcousticEvent) -> float | None:
+    value = _metadata_value(event, "coverage_radius_m")
+    if value is None:
+        return None
+    return max(0.0, float(value))
+
+
+def _station_distance_m(left: AcousticEvent, right: AcousticEvent) -> float | None:
+    if not left.station_location or not right.station_location:
+        return None
+    lat1 = math.radians(float(left.station_location.latitude))
+    lon1 = math.radians(float(left.station_location.longitude))
+    lat2 = math.radians(float(right.station_location.latitude))
+    lon2 = math.radians(float(right.station_location.longitude))
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2.0) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2.0) ** 2
+    return 6371000.0 * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+
+
+def _has_spatial_overlap(events: list[AcousticEvent]) -> bool | None:
+    if len(events) < 2:
+        return None
+    saw_geometry = False
+    for idx, left in enumerate(events):
+        for right in events[idx + 1 :]:
+            left_radius = _coverage_radius_m(left)
+            right_radius = _coverage_radius_m(right)
+            distance = _station_distance_m(left, right)
+            if left_radius is None or right_radius is None or distance is None:
+                continue
+            saw_geometry = True
+            if distance <= left_radius + right_radius:
+                return True
+    return False if saw_geometry else None
+
+
 def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: float = 8.0) -> FusedAlert:
     now = time.time()
     recent = [
@@ -154,14 +210,18 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     active_events = [event for event, _ in active]
     active_station_count = len(active_events)
     total_score = sum(score for _, score in active)
-    same_f0 = _same_f0_detected(active_events)
-    if same_f0 and active_station_count >= 2:
+    same_f0_raw = _same_f0_detected(active_events)
+    shared_scenario_source = _shared_scenario_source(active_events)
+    spatial_overlap = _has_spatial_overlap(active_events)
+    spatially_separate = spatial_overlap is False and not shared_scenario_source
+    same_source_f0 = same_f0_raw and not spatially_separate
+    if same_source_f0 and active_station_count >= 2:
         total_score += 0.15
 
     confirming_active = [
         (event, score)
         for event, score in active
-        if not _hf_negative(event) or _strong_multichannel_evidence(event) or same_f0
+        if not _hf_negative(event) or _strong_multichannel_evidence(event) or same_source_f0
     ]
     confirming_events = [event for event, _ in confirming_active]
 
@@ -181,9 +241,9 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     hf_negative_count = sum(1 for event in active_events if _hf_negative(event))
 
     if (
-        (same_f0 and combined_high_count >= 2)
-        or drone_like_or_alert_count >= 2
-        or (suspect_count >= 3 and same_f0 and combined_mid_count >= 3)
+        (same_source_f0 and combined_high_count >= 2)
+        or (drone_like_or_alert_count >= 2 and not spatially_separate)
+        or (suspect_count >= 3 and same_source_f0 and combined_mid_count >= 3)
     ):
         level = 3
     elif (
@@ -205,10 +265,26 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
         if active_station_count
         else 0.0
     )
+    if active_station_count == 0:
+        interpretation = "background"
+    elif active_station_count == 1:
+        interpretation = "single-station candidate"
+    elif spatially_separate:
+        interpretation = "multiple local candidates"
+    else:
+        interpretation = "network confirmation candidate"
+
+    reason_prefix = interpretation
+    if spatially_separate:
+        reason_prefix += "; multiple local acoustic candidates; stations are not spatially overlapping"
+
     reason = (
-        "network acoustic confirmation candidate; "
+        f"{reason_prefix}; "
         f"active_stations={active_station_count}, max_hf_p_drone={max_hf:.2f}, "
-        f"mean_harmonic={mean_harmonic:.1f}, same_f0={'yes' if same_f0 else 'no'}, "
+        f"mean_harmonic={mean_harmonic:.1f}, same_f0={'yes' if same_f0_raw else 'no'}, "
+        f"same_source_f0={'yes' if same_source_f0 else 'no'}, "
+        f"spatial_overlap={'unknown' if spatial_overlap is None else ('yes' if spatial_overlap else 'no')}, "
+        f"shared_simulated_source={'yes' if shared_scenario_source else 'no'}, "
         f"combined_high={combined_high_count}, local_alerts={local_alert_count}, "
         f"hf_negative_count={hf_negative_count}, total_score={total_score:.2f}"
     )
@@ -221,5 +297,6 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
         status=f"LEVEL_{level}",
         confidence=confidence,
         reason=reason,
+        interpretation=interpretation,
         events_used=active_events[-10:],
     )

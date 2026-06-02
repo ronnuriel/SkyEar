@@ -132,6 +132,7 @@ try:
     fusion_level = int(fusion.get("level", 0))
     confidence = float(fusion.get("confidence", 0.0))
     reason = fusion.get("reason", "")
+    interpretation = fusion.get("interpretation") or "background"
 
     if fusion_level >= 3:
         col1.error(f"LEVEL {fusion_level}")
@@ -143,7 +144,8 @@ try:
         col1.success("LEVEL 0")
 
     col2.metric("Fusion confidence", f"{confidence:.2f}")
-    col3.write(reason)
+    col3.metric("Interpretation", interpretation)
+    st.caption(reason)
 except Exception as e:
     st.error(f"Could not load fusion: {e}")
 

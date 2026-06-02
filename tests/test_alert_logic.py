@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from server.alert_logic import alert_level_from_recent_events
-from shared.event_schema import AcousticEvent
+from shared.event_schema import AcousticEvent, GeoPoint
 
 
 def _event(
@@ -20,10 +20,32 @@ def _event(
     ml_drone_pct: float | None = None,
     combined_drone_evidence_pct: float | None = None,
     operator_label: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    coverage_radius_m: float | None = None,
+    scenario_id: str | None = None,
+    simulated_source_id: str | None = None,
 ) -> AcousticEvent:
+    metadata = {
+        "suspect_threshold": 16.0,
+        "alert_threshold": 22.0,
+        "harmonic_evidence_pct": harmonic_evidence_pct,
+        "ml_drone_pct": ml_drone_pct,
+        "combined_drone_evidence_pct": combined_drone_evidence_pct,
+        "f0_stable": f0_stable,
+        "operator_label": operator_label,
+    }
+    if coverage_radius_m is not None:
+        metadata["coverage_radius_m"] = coverage_radius_m
+    if scenario_id is not None:
+        metadata["scenario_id"] = scenario_id
+    if simulated_source_id is not None:
+        metadata["simulated_source_id"] = simulated_source_id
+
     return AcousticEvent(
         station_id=station_id,
         timestamp_unix=time.time(),
+        station_location=GeoPoint(latitude=latitude, longitude=longitude) if latitude is not None and longitude is not None else None,
         status=status,
         confidence=confidence,
         harmonic_score=harmonic_score,
@@ -36,15 +58,7 @@ def _event(
         calibrated=True,
         channel_agreement_count=channel_agreement_count,
         channel_count=1,
-        metadata={
-            "suspect_threshold": 16.0,
-            "alert_threshold": 22.0,
-            "harmonic_evidence_pct": harmonic_evidence_pct,
-            "ml_drone_pct": ml_drone_pct,
-            "combined_drone_evidence_pct": combined_drone_evidence_pct,
-            "f0_stable": f0_stable,
-            "operator_label": operator_label,
-        },
+        metadata=metadata,
     )
 
 
@@ -52,7 +66,7 @@ def test_one_suspect_station_elevates_to_level_1():
     alert = alert_level_from_recent_events([_event("station_1")])
 
     assert alert.level == 1
-    assert "network acoustic confirmation candidate" in alert.reason
+    assert alert.interpretation == "single-station candidate"
 
 
 def test_two_weak_suspect_stations_with_high_hf_elevate_to_level_2():
@@ -205,6 +219,119 @@ def test_two_high_combined_stations_with_same_f0_are_level_3():
     alert = alert_level_from_recent_events(events)
 
     assert alert.level == 3
+
+
+def test_two_close_stations_with_same_f0_are_network_candidate_level_2():
+    events = [
+        _event(
+            "station_1",
+            confidence=0.2,
+            harmonic_evidence_pct=0.30,
+            ml_drone_pct=0.9,
+            hf_p_drone=0.9,
+            combined_drone_evidence_pct=0.50,
+            best_f0_hz=1000,
+            latitude=32.0,
+            longitude=34.0,
+            coverage_radius_m=120.0,
+        ),
+        _event(
+            "station_2",
+            confidence=0.2,
+            harmonic_evidence_pct=0.30,
+            ml_drone_pct=0.9,
+            hf_p_drone=0.9,
+            combined_drone_evidence_pct=0.50,
+            best_f0_hz=1040,
+            latitude=32.0,
+            longitude=34.001,
+            coverage_radius_m=120.0,
+        ),
+    ]
+
+    alert = alert_level_from_recent_events(events)
+
+    assert alert.level == 2
+    assert alert.interpretation == "network confirmation candidate"
+    assert "spatial_overlap=yes" in alert.reason
+    assert "same_source_f0=yes" in alert.reason
+
+
+def test_two_far_non_overlapping_stations_are_multiple_local_candidates():
+    events = [
+        _event(
+            "station_1",
+            confidence=0.2,
+            harmonic_evidence_pct=0.30,
+            ml_drone_pct=0.9,
+            hf_p_drone=0.9,
+            combined_drone_evidence_pct=0.50,
+            best_f0_hz=1000,
+            latitude=32.0,
+            longitude=34.0,
+            coverage_radius_m=100.0,
+        ),
+        _event(
+            "station_2",
+            confidence=0.2,
+            harmonic_evidence_pct=0.30,
+            ml_drone_pct=0.9,
+            hf_p_drone=0.9,
+            combined_drone_evidence_pct=0.50,
+            best_f0_hz=1040,
+            latitude=32.0,
+            longitude=34.1,
+            coverage_radius_m=100.0,
+        ),
+    ]
+
+    alert = alert_level_from_recent_events(events)
+
+    assert alert.level in {1, 2}
+    assert alert.interpretation == "multiple local candidates"
+    assert "multiple local acoustic candidates; stations are not spatially overlapping" in alert.reason
+    assert "same_f0=yes" in alert.reason
+    assert "same_source_f0=no" in alert.reason
+
+
+def test_same_scenario_and_source_allows_fusion_without_spatial_overlap():
+    events = [
+        _event(
+            "station_1",
+            confidence=0.2,
+            harmonic_evidence_pct=0.30,
+            ml_drone_pct=0.9,
+            hf_p_drone=0.9,
+            combined_drone_evidence_pct=0.50,
+            best_f0_hz=1000,
+            latitude=32.0,
+            longitude=34.0,
+            coverage_radius_m=100.0,
+            scenario_id="demo_run_1",
+            simulated_source_id="source_a",
+        ),
+        _event(
+            "station_2",
+            confidence=0.2,
+            harmonic_evidence_pct=0.30,
+            ml_drone_pct=0.9,
+            hf_p_drone=0.9,
+            combined_drone_evidence_pct=0.50,
+            best_f0_hz=1040,
+            latitude=32.0,
+            longitude=34.1,
+            coverage_radius_m=100.0,
+            scenario_id="demo_run_1",
+            simulated_source_id="source_a",
+        ),
+    ]
+
+    alert = alert_level_from_recent_events(events)
+
+    assert alert.level == 2
+    assert alert.interpretation == "network confirmation candidate"
+    assert "shared_simulated_source=yes" in alert.reason
+    assert "same_source_f0=yes" in alert.reason
 
 
 def test_ml_only_without_harmonic_support_stays_level_1_max():

@@ -87,5 +87,6 @@ class FusedAlert(BaseModel):
     status: str
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
+    interpretation: Optional[str] = None
     events_used: list[AcousticEvent] = Field(default_factory=list)
     estimated_location: Optional[GeoPoint] = None
