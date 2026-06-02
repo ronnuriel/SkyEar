@@ -1,0 +1,29 @@
+station:
+  station_id: station_001
+  name: Home Mac Test Node
+  latitude: 32.0853
+  longitude: 34.7818
+  altitude_m: 20.0
+
+audio:
+  device_id: null
+  sample_rate: 44100
+  channels: 1
+  window_sec: 2.0
+
+detector:
+  f0_min: 500
+  f0_max: 2200
+  max_freq: 7000
+  suspect_threshold: 14.0
+  alert_threshold: 22.0
+  min_duration_sec: 3.0
+
+direction:
+  enabled: false
+  array_radius_m: 0.12
+  scan_step_deg: 10
+
+server:
+  url: http://127.0.0.1:8080/events
+  send_interval_sec: 0.5
