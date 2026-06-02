@@ -7,16 +7,36 @@ import requests
 import yaml
 
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
-from station.audio_capture import audio_blocks, to_mono, list_input_devices
-from station.detector import DetectorConfig, detect_drone_like
+from station.audio_capture import audio_blocks, list_input_devices
+from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
+
+DETECTOR_VERSION = "station-detector-state-v1"
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-def rms(x: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(x ** 2)))
+def _detector_config(det_cfg: dict[str, Any]) -> StationDetectorStateConfig:
+    return StationDetectorStateConfig(
+        f0_min=int(det_cfg.get("f0_min", 500)),
+        f0_max=int(det_cfg.get("f0_max", 2200)),
+        max_freq=int(det_cfg.get("max_freq", 7000)),
+        min_harmonics=int(det_cfg.get("min_harmonics", 3)),
+        min_suspect_threshold=float(det_cfg.get("min_suspect_threshold", det_cfg.get("suspect_threshold", 14.0))),
+        min_alert_threshold=float(det_cfg.get("min_alert_threshold", det_cfg.get("alert_threshold", 22.0))),
+        calibration_seconds=float(det_cfg.get("calibration_seconds", 8.0)),
+        min_alert_duration_sec=float(det_cfg.get("min_alert_duration_sec", det_cfg.get("min_duration_sec", 3.0))),
+        clear_after_sec=float(det_cfg.get("clear_after_sec", 2.5)),
+    )
+
+def _station_mode(audio: np.ndarray, direction_allowed: bool) -> str:
+    channel_count = audio.shape[1] if audio.ndim == 2 else 1
+    if direction_allowed:
+        return "synchronized_array_direction"
+    if channel_count > 1:
+        return "unsynchronized_multimic_voting"
+    return "mono"
 
 def main():
     parser = argparse.ArgumentParser()
@@ -32,17 +52,15 @@ def main():
     cfg = load_yaml(args.config)
     station_cfg, audio_cfg = cfg["station"], cfg["audio"]
     det_cfg, dir_cfg, server_cfg = cfg["detector"], cfg["direction"], cfg["server"]
+    mic_cfg = cfg.get("mic_array", {})
 
-    detector_config = DetectorConfig(
-        f0_min=int(det_cfg["f0_min"]),
-        f0_max=int(det_cfg["f0_max"]),
-        max_freq=int(det_cfg["max_freq"]),
-        suspect_threshold=float(det_cfg["suspect_threshold"]),
-        alert_threshold=float(det_cfg["alert_threshold"]),
-    )
-
-    evidence_started = None
+    detector_state = StationDetectorState(_detector_config(det_cfg))
     last_send = 0.0
+    direction_requested = bool(dir_cfg.get("enabled"))
+    direction_allowed = direction_requested and mic_cfg.get("sync_mode") == "synchronized"
+    if direction_requested and not direction_allowed:
+        print("Direction disabled: this microphone profile is not synchronized.")
+
     print("Starting station:", station_cfg["station_id"])
 
     for audio in audio_blocks(
@@ -52,25 +70,10 @@ def main():
         window_sec=float(audio_cfg["window_sec"]),
     ):
         now = time.time()
-        mono = to_mono(audio)
-        result = detect_drone_like(mono, int(audio_cfg["sample_rate"]), detector_config)
-
-        duration = 0.0
-        if result.status in {"suspect", "alert"}:
-            if evidence_started is None:
-                evidence_started = now
-            duration = now - evidence_started
-        else:
-            evidence_started = None
-
-        status = EventStatus.BACKGROUND
-        if result.status == "suspect":
-            status = EventStatus.SUSPECT
-        if result.status == "alert" and duration >= float(det_cfg["min_duration_sec"]):
-            status = EventStatus.ALERT
+        frame = detector_state.update(audio, int(audio_cfg["sample_rate"]), now)
 
         azimuth, direction_confidence = None, None
-        if bool(dir_cfg["enabled"]) and audio.ndim == 2 and audio.shape[1] >= 3:
+        if direction_allowed and audio.ndim == 2 and audio.shape[1] >= 3:
             azimuth, direction_confidence = estimate_azimuth(
                 audio,
                 int(audio_cfg["sample_rate"]),
@@ -87,19 +90,39 @@ def main():
                 longitude=float(station_cfg["longitude"]),
                 altitude_m=float(station_cfg.get("altitude_m", 0.0)),
             ),
-            status=status,
-            confidence=result.confidence,
-            harmonic_score=result.harmonic_score,
-            best_f0_hz=result.best_f0_hz,
+            status=EventStatus(frame.status),
+            confidence=frame.confidence,
+            harmonic_score=frame.harmonic_score,
+            best_f0_hz=frame.best_f0_hz,
             estimated_azimuth_deg=azimuth,
             direction_confidence=direction_confidence,
-            rms=rms(mono),
-            peak=float(np.max(np.abs(mono))),
-            duration_sec=duration,
-            metadata={"sample_rate": audio_cfg["sample_rate"], "channels": audio_cfg["channels"]},
+            rms=frame.rms,
+            peak=frame.peak,
+            duration_sec=frame.duration_sec,
+            calibrated=frame.calibrated,
+            strongest_channel=frame.strongest_channel,
+            channel_agreement_count=frame.agreement_count,
+            channel_count=frame.channel_count,
+            channel_evidence=[item.__dict__ for item in frame.per_channel],
+            detector_version=DETECTOR_VERSION,
+            station_mode=_station_mode(audio, direction_allowed),
+            metadata={
+                "sample_rate": audio_cfg["sample_rate"],
+                "channels": audio_cfg["channels"],
+                "mic_profile": mic_cfg.get("profile"),
+                "mic_sync_mode": mic_cfg.get("sync_mode"),
+                "suspect_threshold": frame.suspect_threshold,
+                "alert_threshold": frame.alert_threshold,
+            },
         )
 
-        print(f"{time.strftime('%H:%M:%S')} {event.status:10s} conf={event.confidence:.2f} harm={event.harmonic_score:.1f} f0={event.best_f0_hz} az={event.estimated_azimuth_deg}")
+        print(
+            f"{time.strftime('%H:%M:%S')} {event.status:11s} "
+            f"conf={event.confidence:.2f} harm={event.harmonic_score:.1f} "
+            f"f0={event.best_f0_hz} rms={event.rms:.4f} dur={event.duration_sec:.1f} "
+            f"agree={event.channel_agreement_count} strong={event.strongest_channel} "
+            f"az={event.estimated_azimuth_deg}"
+        )
 
         if now - last_send >= float(server_cfg["send_interval_sec"]):
             try:

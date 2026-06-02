@@ -40,6 +40,13 @@ st.subheader("Recent events")
 try:
     events = requests.get(f"{server_url}/events?limit=200", timeout=2).json()
     show_station_table(events)
+    if events:
+        latest = events[-1]
+        channel_evidence = latest.get("channel_evidence") or []
+        if channel_evidence:
+            st.subheader("Latest per-channel evidence")
+            st.dataframe(pd.DataFrame(channel_evidence), width="stretch")
+    st.caption("Direction is only reliable for synchronized mic array profiles.")
 except Exception as e:
     st.error(f"Could not load events: {e}")
 

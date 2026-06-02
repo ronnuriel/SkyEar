@@ -6,7 +6,7 @@ station:
   altitude_m: 20.0
 
 audio:
-  device_id: null
+  device_id: 0
   sample_rate: 44100
   channels: 1
   window_sec: 2.0
@@ -15,9 +15,17 @@ detector:
   f0_min: 500
   f0_max: 2200
   max_freq: 7000
-  suspect_threshold: 14.0
-  alert_threshold: 22.0
-  min_duration_sec: 3.0
+  min_harmonics: 3
+  min_suspect_threshold: 14.0
+  min_alert_threshold: 22.0
+  calibration_seconds: 8.0
+  min_alert_duration_sec: 3.0
+  clear_after_sec: 2.5
+
+mic_array:
+  profile: iphone_stereo_untrusted
+  sync_mode: unsynchronized
+  channel_mode: voting
 
 direction:
   enabled: false

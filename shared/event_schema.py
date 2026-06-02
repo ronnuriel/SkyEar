@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 class EventStatus(str, Enum):
+    CALIBRATING = "calibrating"
     BACKGROUND = "background"
     SUSPECT = "suspect"
     DRONE_LIKE = "drone_like"
@@ -13,6 +14,13 @@ class GeoPoint(BaseModel):
     latitude: float
     longitude: float
     altitude_m: Optional[float] = None
+
+class ChannelEvidence(BaseModel):
+    channel_index: int
+    rms: Optional[float] = None
+    harmonic_score: float
+    best_f0_hz: Optional[int] = None
+    passed: bool
 
 class AcousticEvent(BaseModel):
     station_id: str
@@ -30,6 +38,13 @@ class AcousticEvent(BaseModel):
     rms: Optional[float] = None
     peak: Optional[float] = None
     duration_sec: Optional[float] = None
+    calibrated: bool = False
+    strongest_channel: Optional[int] = None
+    channel_agreement_count: Optional[int] = None
+    channel_count: Optional[int] = None
+    channel_evidence: list[ChannelEvidence] = Field(default_factory=list)
+    detector_version: Optional[str] = None
+    station_mode: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class FusedAlert(BaseModel):
