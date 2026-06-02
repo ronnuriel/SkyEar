@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from dashboard.station_view import external_spectrum_app_url, plot_spectrum_figure, status_label
+from dashboard.station_view import external_spectrum_app_url, plot_spectrum_figure, render_decision_bars, status_label
 
 
 def _draw_status(status: str):
@@ -34,6 +34,7 @@ def _render_station_card(
         _draw_status(status)
         if demo_phase:
             st.caption(f"Demo phase: {demo_phase}")
+        render_decision_bars(st, event)
 
         cols = st.columns(4)
         cols[0].metric("Confidence", f"{float(event.get('confidence') or 0.0):.2f}")

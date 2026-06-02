@@ -30,6 +30,20 @@ def _is_near_threshold_background(event: AcousticEvent, suspect_threshold: float
     return hf >= 0.90 and harmonic >= suspect_threshold * 0.85
 
 
+def _hf_negative(event: AcousticEvent) -> bool:
+    metadata = event.metadata or {}
+    if event.hf_negative is not None:
+        return bool(event.hf_negative)
+    if "hf_negative" in metadata:
+        return bool(metadata.get("hf_negative"))
+    return event.hf_p_drone is not None and float(event.hf_p_drone) < 0.20
+
+
+def _strong_multichannel_evidence(event: AcousticEvent) -> bool:
+    metadata = event.metadata or {}
+    return int(event.channel_agreement_count or 0) >= 2 and bool(metadata.get("f0_stable"))
+
+
 def station_evidence_score(event: AcousticEvent) -> float:
     status = _event_status(event)
     suspect_threshold, alert_threshold = _thresholds(event)
@@ -53,6 +67,8 @@ def station_evidence_score(event: AcousticEvent) -> float:
         score += 0.10
     if int(event.channel_agreement_count or 0) >= 2:
         score += 0.10
+    if _hf_negative(event) and not _strong_multichannel_evidence(event):
+        score *= 0.40
 
     return float(max(0.0, min(1.0, score)))
 
@@ -93,10 +109,18 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     if same_f0 and active_station_count >= 2:
         total_score += 0.15
 
-    local_alert_count = sum(1 for event in active_events if _event_status(event) == "alert")
-    drone_like_or_alert_count = sum(1 for event in active_events if _event_status(event) in {"drone_like", "alert"})
-    suspect_count = sum(1 for event in active_events if _event_status(event) == "suspect")
-    weak_station_count = sum(1 for _, score in active if score >= 0.45)
+    confirming_active = [
+        (event, score)
+        for event, score in active
+        if not _hf_negative(event) or _strong_multichannel_evidence(event) or same_f0
+    ]
+    confirming_events = [event for event, _ in confirming_active]
+
+    local_alert_count = sum(1 for event in confirming_events if _event_status(event) == "alert")
+    drone_like_or_alert_count = sum(1 for event in confirming_events if _event_status(event) in {"drone_like", "alert"})
+    suspect_count = sum(1 for event in confirming_events if _event_status(event) == "suspect")
+    weak_station_count = sum(1 for _, score in confirming_active if score >= 0.45)
+    hf_negative_count = sum(1 for event in active_events if _hf_negative(event))
 
     if (total_score >= 2.0 and active_station_count >= 2) or drone_like_or_alert_count >= 2 or (
         suspect_count >= 3 and same_f0
@@ -119,7 +143,7 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
         "network acoustic confirmation candidate; "
         f"active_stations={active_station_count}, max_hf_p_drone={max_hf:.2f}, "
         f"mean_harmonic={mean_harmonic:.1f}, same_f0={'yes' if same_f0 else 'no'}, "
-        f"local_alerts={local_alert_count}, total_score={total_score:.2f}"
+        f"local_alerts={local_alert_count}, hf_negative_count={hf_negative_count}, total_score={total_score:.2f}"
     )
 
     confidence = float(max(0.0, min(1.0, total_score / 2.0)))

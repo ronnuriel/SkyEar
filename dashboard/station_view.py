@@ -40,6 +40,71 @@ def status_label(status: str) -> tuple[str, str]:
     return STATUS_STYLE.get(status, (status.upper(), "info"))
 
 
+def _score_value(event: dict, name: str) -> float | None:
+    metadata = event.get("metadata") or {}
+    value = event.get(name)
+    if value is None:
+        value = metadata.get(name)
+    if value is None:
+        return None
+    return float(np.clip(float(value), 0.0, 1.0))
+
+
+def format_pct(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(np.clip(value, 0.0, 1.0)) * 100:.0f}%"
+
+
+def decision_scores(event: dict) -> tuple[float, float | None]:
+    harmonic = _score_value(event, "harmonic_evidence_pct")
+    ml = _score_value(event, "ml_drone_pct")
+    if ml is None:
+        ml = _score_value(event, "hf_p_drone")
+    return (harmonic or 0.0), ml
+
+
+def decision_display_state(event: dict) -> dict[str, str]:
+    harmonic, ml = decision_scores(event)
+    ml_value = ml if ml is not None else 0.0
+    if harmonic >= 0.60 and ml_value >= 0.60:
+        return {"label": "ML + harmonic agree", "harmonic_color": "#dc2626", "ml_color": "#ea580c"}
+    if harmonic >= 0.60 and ml_value <= 0.30:
+        return {"label": "non-drone harmonic", "harmonic_color": "#ca8a04", "ml_color": "#6b7280"}
+    if ml_value >= 0.60 and harmonic <= 0.30:
+        return {"label": "ML-only suspect", "harmonic_color": "#a3a3a3", "ml_color": "#2563eb"}
+    return {"label": "background", "harmonic_color": "#16a34a", "ml_color": "#22c55e"}
+
+
+def render_decision_bars(st_module, event: dict) -> None:
+    harmonic, ml = decision_scores(event)
+    display = decision_display_state(event)
+    ml_width = 0.0 if ml is None else ml
+    reason = event.get("decision_reason") or (event.get("metadata") or {}).get("decision_reason")
+    reason_html = f"<div class='sky-score-reason'>{reason}</div>" if reason else ""
+    st_module.markdown(
+        f"""
+<div class="sky-score-box">
+  <div class="sky-score-label">{display['label']}</div>
+  <div class="sky-score-row"><span>Harmonic evidence</span><b>{format_pct(harmonic)}</b></div>
+  <div class="sky-score-track"><div style="width:{harmonic * 100:.0f}%;background:{display['harmonic_color']};"></div></div>
+  <div class="sky-score-row"><span>ML drone probability</span><b>{format_pct(ml)}</b></div>
+  <div class="sky-score-track"><div style="width:{ml_width * 100:.0f}%;background:{display['ml_color']};"></div></div>
+  {reason_html}
+</div>
+<style>
+.sky-score-box {{ margin: .35rem 0 .65rem 0; }}
+.sky-score-label {{ font-size: .8rem; font-weight: 700; margin-bottom: .2rem; }}
+.sky-score-row {{ display:flex; justify-content:space-between; gap:.5rem; font-size:.75rem; }}
+.sky-score-track {{ height: .45rem; background:#e5e7eb; border-radius: 999px; overflow:hidden; margin:.1rem 0 .3rem 0; }}
+.sky-score-track div {{ height: 100%; border-radius: 999px; }}
+.sky-score-reason {{ color:#6b7280; font-size:.72rem; line-height:1.2; margin-top:.2rem; }}
+</style>
+        """.strip(),
+        unsafe_allow_html=True,
+    )
+
+
 def plot_spectrum_figure(metadata: dict, small: bool = False):
     freqs = metadata.get("spectrum_freqs_hz") or []
     db = metadata.get("spectrum_db") or []

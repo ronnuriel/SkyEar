@@ -55,8 +55,11 @@ class StationDetectionFrame:
     suspect_threshold: float = 14.0
     alert_threshold: float = 22.0
     f0_stable: bool = False
+    harmonic_evidence_pct: float = 0.0
+    ml_drone_pct: Optional[float] = None
     hf_negative: bool = False
     hf_positive: bool = False
+    decision_reason: str = "no acoustic evidence"
 
 
 def _sigmoid_score(score: float, threshold: float) -> float:
@@ -148,6 +151,8 @@ class StationDetectorState:
         has_alert_harmonic = evidence_score >= self.alert_threshold
         self._record_history(best_f0, evidence_score)
         f0_stable = self._f0_is_stable()
+        harmonic_evidence_pct = self._harmonic_evidence_pct(evidence_score)
+        ml_drone_pct = hf_p_drone if hf_p_drone is not None else cnn_p_drone
         hf_available = hf_p_drone is not None
         hf_positive = hf_available and float(hf_p_drone) >= self.config.advisory_threshold
         hf_negative = hf_available and float(hf_p_drone) < self.config.hf_negative_threshold
@@ -177,6 +182,15 @@ class StationDetectorState:
             drone_like_ready=drone_like_ready,
             alert_ready=alert_ready,
         )
+        decision_reason = self._decision_reason(
+            status=status,
+            has_suspect_harmonic=has_suspect_harmonic,
+            harmonic_evidence_pct=harmonic_evidence_pct,
+            hf_negative=hf_negative,
+            hf_positive=hf_positive,
+            strong_channel_agreement=strong_channel_agreement,
+            f0_stable=f0_stable,
+        )
         self._status_history.append(status)
         self._trim_history(self._status_history)
         confidence = self._confidence(evidence_score, has_suspect_harmonic, hf_p_drone, cnn_p_drone, agreement_count)
@@ -194,8 +208,11 @@ class StationDetectorState:
             agreement_count=agreement_count,
             channel_count=channels.shape[1],
             f0_stable=f0_stable,
+            harmonic_evidence_pct=harmonic_evidence_pct,
+            ml_drone_pct=ml_drone_pct,
             hf_negative=hf_negative,
             hf_positive=hf_positive,
+            decision_reason=decision_reason,
         )
 
     def _finish_calibration(self) -> None:
@@ -275,6 +292,34 @@ class StationDetectorState:
         self._last_active_status = None
         return "background", 0.0
 
+    def _harmonic_evidence_pct(self, evidence_score: float) -> float:
+        denominator = max(self.alert_threshold - self.suspect_threshold, 1e-6)
+        value = (float(evidence_score) - self.suspect_threshold) / denominator
+        return float(np.clip(value, 0.0, 1.0))
+
+    def _decision_reason(
+        self,
+        status: str,
+        has_suspect_harmonic: bool,
+        harmonic_evidence_pct: float,
+        hf_negative: bool,
+        hf_positive: bool,
+        strong_channel_agreement: bool,
+        f0_stable: bool,
+    ) -> str:
+        high_harmonic = harmonic_evidence_pct >= 0.75
+        if hf_negative and high_harmonic:
+            return "harmonic source detected, but ML strongly rejects drone"
+        if hf_positive and high_harmonic:
+            return "ML and harmonic rotor evidence agree"
+        if hf_positive and not has_suspect_harmonic:
+            return "ML-only suspect; harmonic rotor evidence is weak"
+        if has_suspect_harmonic and status == "suspect":
+            return "harmonic source detected; awaiting stronger drone evidence"
+        if strong_channel_agreement and f0_stable:
+            return "multi-channel stable harmonic evidence"
+        return "background or insufficient evidence"
+
     def _record_history(self, best_f0_hz: Optional[int], score: float) -> None:
         self._best_f0_history.append(best_f0_hz)
         self._score_history.append(float(score))
@@ -327,8 +372,11 @@ class StationDetectorState:
         strongest_channel: Optional[int] = None,
         agreement_count: int = 0,
         f0_stable: bool = False,
+        harmonic_evidence_pct: float = 0.0,
+        ml_drone_pct: Optional[float] = None,
         hf_negative: bool = False,
         hf_positive: bool = False,
+        decision_reason: str = "no acoustic evidence",
     ) -> StationDetectionFrame:
         return StationDetectionFrame(
             status=status,
@@ -346,6 +394,9 @@ class StationDetectorState:
             suspect_threshold=self.suspect_threshold,
             alert_threshold=self.alert_threshold,
             f0_stable=bool(f0_stable),
+            harmonic_evidence_pct=float(np.clip(harmonic_evidence_pct, 0.0, 1.0)),
+            ml_drone_pct=None if ml_drone_pct is None else float(np.clip(ml_drone_pct, 0.0, 1.0)),
             hf_negative=bool(hf_negative),
             hf_positive=bool(hf_positive),
+            decision_reason=str(decision_reason),
         )

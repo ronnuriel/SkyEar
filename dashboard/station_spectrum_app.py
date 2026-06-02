@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from dashboard.station_view import plot_spectrogram_figure, plot_spectrum_figure, status_label
+from dashboard.station_view import plot_spectrogram_figure, plot_spectrum_figure, render_decision_bars, status_label
 
 
 def _query_param(name: str, default: str) -> str:
@@ -69,6 +69,7 @@ else:
     status = event.get("status", "background")
     label, kind = status_label(status)
     getattr(st, kind)(label)
+    render_decision_bars(st, event)
 
     cols = st.columns(6)
     cols[0].metric("Station", event.get("station_id", station_id))

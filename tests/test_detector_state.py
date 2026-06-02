@@ -117,8 +117,11 @@ def test_hf_negative_caps_single_channel_alert_harmonic_to_suspect():
     frame = state.update(_harmonic(), SR, 3.0, hf_p_drone=0.001)
 
     assert frame.harmonic_score >= frame.alert_threshold
+    assert frame.harmonic_evidence_pct > 0.75
+    assert frame.ml_drone_pct == 0.001
     assert frame.hf_negative is True
     assert frame.hf_positive is False
+    assert frame.decision_reason == "harmonic source detected, but ML strongly rejects drone"
     assert frame.status == "suspect"
 
 
@@ -145,6 +148,7 @@ def test_hf_positive_with_high_harmonic_can_reach_alert_after_duration():
     assert first.status in {"suspect", "drone_like"}
     assert third.hf_positive is True
     assert third.f0_stable is True
+    assert third.decision_reason == "ML and harmonic rotor evidence agree"
     assert third.status == "alert"
 
 

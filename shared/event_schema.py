@@ -30,9 +30,14 @@ class AcousticEvent(BaseModel):
     status: EventStatus
     confidence: float = Field(ge=0.0, le=1.0)
     harmonic_score: float
+    harmonic_evidence_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     best_f0_hz: Optional[int] = None
+    ml_drone_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     hf_p_drone: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     cnn_p_drone: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    hf_negative: Optional[bool] = None
+    hf_positive: Optional[bool] = None
+    decision_reason: Optional[str] = None
     estimated_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
     direction_confidence: Optional[float] = None
     rms: Optional[float] = None

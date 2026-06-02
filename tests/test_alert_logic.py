@@ -81,6 +81,18 @@ def test_background_events_remain_level_0():
     assert alert.events_used == []
 
 
+def test_hf_negative_harmonic_sources_do_not_confirm_network():
+    events = [
+        _event("station_1", confidence=0.9, harmonic_score=27.0, hf_p_drone=0.001, best_f0_hz=800),
+        _event("station_2", confidence=0.9, harmonic_score=27.0, hf_p_drone=0.001, best_f0_hz=1300),
+    ]
+
+    alert = alert_level_from_recent_events(events)
+
+    assert alert.level < 2
+    assert "hf_negative_count=2" in alert.reason
+
+
 def test_one_alert_station_elevates_to_level_2_not_level_3():
     alert = alert_level_from_recent_events(
         [_event("station_1", status="alert", confidence=0.95, harmonic_score=24.0, hf_p_drone=0.4)]

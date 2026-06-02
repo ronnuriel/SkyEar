@@ -115,3 +115,34 @@ def test_event_metadata_contains_dataset_context_without_raw_audio():
     assert event.metadata["mic_sync_mode"] == "unsynchronized"
     assert event.station_mode == "unsynchronized_multimic_voting"
     assert not _metadata_has_key(event.metadata, {"audio", "array", "raw_audio", "waveform"})
+
+
+def test_event_metadata_marks_hf_negative_for_high_harmonic_source():
+    sample_rate = 44100
+    t = np.arange(sample_rate, dtype=np.float32) / sample_rate
+    mono = np.zeros_like(t)
+    for k in range(1, 5):
+        mono += (0.05 / k) * np.sin(2 * np.pi * 700 * k * t)
+    audio = mono_to_simulated_channels(mono.astype(np.float32), 1)
+    detector_state = StationDetectorState(StationDetectorStateConfig(calibration_seconds=0.0))
+    detector_state.calibrated = True
+
+    event = build_event(
+        station_id="hf_dataset_test",
+        dataset_id="example/source-data",
+        dataset_config="source-only",
+        dataset_idx=3,
+        dataset_label_value="source-only",
+        audio=audio,
+        sample_rate=sample_rate,
+        timestamp=1.0,
+        detector_state=detector_state,
+        hf_p_drone=0.001,
+    )
+
+    assert event.status == "suspect"
+    assert event.hf_negative is True
+    assert event.metadata["hf_negative"] is True
+    assert event.metadata["harmonic_evidence_pct"] > 0.75
+    assert event.metadata["ml_drone_pct"] == 0.001
+    assert event.metadata["decision_reason"] == "harmonic source detected, but ML strongly rejects drone"
