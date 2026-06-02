@@ -3,7 +3,16 @@ from __future__ import annotations
 import numpy as np
 
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
-from tools.stream_hf_dataset import build_event, iter_audio_windows, mono_to_simulated_channels
+from tools.stream_hf_dataset import (
+    DEFAULT_DATASET_CONFIG,
+    DEFAULT_DATASET_ID,
+    DEFAULT_DATASET_SPLIT,
+    build_event,
+    dataset_label,
+    iter_audio_windows,
+    mono_to_simulated_channels,
+    resolve_dataset_options,
+)
 
 
 def _metadata_has_key(metadata, forbidden: set[str]) -> bool:
@@ -35,6 +44,17 @@ def test_iter_audio_windows_pads_final_window():
     assert np.allclose(windows[-1], [9, 0, 0])
 
 
+def test_primary_dataset_defaults_to_existing_config_and_split():
+    config, split = resolve_dataset_options(DEFAULT_DATASET_ID, None, "train")
+
+    assert config == DEFAULT_DATASET_CONFIG
+    assert split == DEFAULT_DATASET_SPLIT
+
+
+def test_dataset_label_uses_data_type_column():
+    assert dataset_label({"data_type": "drone-only"}, fallback="fallback") == "drone-only"
+
+
 def test_event_metadata_contains_dataset_context_without_raw_audio():
     sample_rate = 44100
     mono = np.zeros(sample_rate, dtype=np.float32)
@@ -44,6 +64,7 @@ def test_event_metadata_contains_dataset_context_without_raw_audio():
     event = build_event(
         station_id="hf_dataset_test",
         dataset_id="example/drone-data",
+        dataset_config="drone-only",
         dataset_idx=7,
         dataset_label_value="drone",
         audio=audio,
@@ -54,6 +75,7 @@ def test_event_metadata_contains_dataset_context_without_raw_audio():
 
     assert event.metadata["source"] == "huggingface_dataset"
     assert event.metadata["dataset_id"] == "example/drone-data"
+    assert event.metadata["dataset_config"] == "drone-only"
     assert event.metadata["dataset_label"] == "drone"
     assert event.metadata["dataset_index"] == 7
     assert event.metadata["mic_sync_mode"] == "unsynchronized"

@@ -17,6 +17,8 @@ from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary
 
 
 DEFAULT_DATASET_ID = "ahlab-drone-project/DroneAudioSet"
+DEFAULT_DATASET_CONFIG = "drone-only"
+DEFAULT_DATASET_SPLIT = "train_001"
 DETECTOR_VERSION = "hf-dataset-stream-v1"
 
 
@@ -83,8 +85,13 @@ def extract_mono_audio(example: dict[str, Any], audio_column: str | None = None)
     return array.astype(np.float32), int(audio["sampling_rate"]), audio_column
 
 
-def dataset_label(example: dict[str, Any], features: Any = None, audio_column: str | None = None) -> str:
-    candidates = ["label", "labels", "class", "category", "target"]
+def dataset_label(
+    example: dict[str, Any],
+    features: Any = None,
+    audio_column: str | None = None,
+    fallback: str = "unknown",
+) -> str:
+    candidates = ["label", "labels", "class", "category", "target", "data_type"]
     for key in candidates:
         if key not in example or key == audio_column:
             continue
@@ -101,7 +108,7 @@ def dataset_label(example: dict[str, Any], features: Any = None, audio_column: s
             except Exception:
                 pass
         return str(value)
-    return "unknown"
+    return fallback
 
 
 def label_matches(label: str, label_filter: str | None) -> bool:
@@ -114,6 +121,7 @@ def build_event(
     *,
     station_id: str,
     dataset_id: str,
+    dataset_config: str | None,
     dataset_idx: int,
     dataset_label_value: str,
     audio: np.ndarray,
@@ -159,6 +167,7 @@ def build_event(
         metadata={
             "source": "huggingface_dataset",
             "dataset_id": dataset_id,
+            "dataset_config": dataset_config,
             "dataset_label": dataset_label_value,
             "dataset_index": dataset_idx,
             "sample_rate": sample_rate,
@@ -178,12 +187,26 @@ def build_event(
     )
 
 
-def load_dataset_iterable(dataset_id: str, split: str, streaming: bool) -> Iterable[dict[str, Any]]:
+def load_dataset_iterable(
+    dataset_id: str,
+    split: str,
+    streaming: bool,
+    config_name: str | None = None,
+) -> Iterable[dict[str, Any]]:
     try:
         from datasets import load_dataset
     except Exception as exc:
         raise RuntimeError("datasets is required; install requirements_hf.txt") from exc
-    return load_dataset(dataset_id, split=split, streaming=streaming)
+    return load_dataset(dataset_id, name=config_name, split=split, streaming=streaming)
+
+
+def resolve_dataset_options(dataset_id: str, config_name: str | None, split: str) -> tuple[str | None, str]:
+    if dataset_id != DEFAULT_DATASET_ID:
+        return config_name, split
+
+    resolved_config = config_name or DEFAULT_DATASET_CONFIG
+    resolved_split = DEFAULT_DATASET_SPLIT if split == "train" else split
+    return resolved_config, resolved_split
 
 
 def parse_args() -> argparse.Namespace:
@@ -194,6 +217,11 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--dataset", default=DEFAULT_DATASET_ID)
+    parser.add_argument(
+        "--config",
+        default=None,
+        help=f"Dataset config/name. Defaults to {DEFAULT_DATASET_CONFIG!r} for {DEFAULT_DATASET_ID}.",
+    )
     parser.add_argument("--split", default="train")
     parser.add_argument("--server", default="http://127.0.0.1:8080/events")
     parser.add_argument("--station-id", default="hf_dataset_001")
@@ -201,6 +229,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-sec", type=float, default=2.0)
     parser.add_argument("--sample-rate", type=int, default=44100)
     parser.add_argument("--max-samples", type=int, default=50)
+    parser.add_argument("--max-windows", type=int, default=None, help="Optional cap on total posted audio windows.")
     parser.add_argument("--realtime", action="store_true")
     parser.add_argument("--label-filter")
     parser.add_argument("--streaming", action="store_true")
@@ -210,7 +239,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> None:
-    dataset = load_dataset_iterable(args.dataset, args.split, args.streaming)
+    dataset_config, dataset_split = resolve_dataset_options(args.dataset, args.config, args.split)
+
+    dataset = load_dataset_iterable(args.dataset, dataset_split, args.streaming, config_name=dataset_config)
     features = getattr(dataset, "features", None)
     detector_state = StationDetectorState(StationDetectorStateConfig())
     hf_detector = HFDetector(model_id=args.model_id) if args.hf else None
@@ -225,7 +256,12 @@ def run(args: argparse.Namespace) -> None:
 
         if audio_column is None:
             audio_column = find_audio_column(example)
-        label = dataset_label(example, features=features, audio_column=audio_column)
+        label = dataset_label(
+            example,
+            features=features,
+            audio_column=audio_column,
+            fallback=dataset_config or "unknown",
+        )
         if not label_matches(label, args.label_filter):
             continue
 
@@ -234,6 +270,8 @@ def run(args: argparse.Namespace) -> None:
         samples_seen += 1
 
         for window in iter_audio_windows(mono, int(args.sample_rate), float(args.window_sec)):
+            if args.max_windows is not None and windows_sent >= int(args.max_windows):
+                return
             loop_start = time.time()
             audio = mono_to_simulated_channels(window, int(args.channels))
             if hf_detector is not None and windows_sent % 2 == 0:
@@ -242,6 +280,7 @@ def run(args: argparse.Namespace) -> None:
             event = build_event(
                 station_id=args.station_id,
                 dataset_id=args.dataset,
+                dataset_config=dataset_config,
                 dataset_idx=dataset_idx,
                 dataset_label_value=label,
                 audio=audio,
