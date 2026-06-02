@@ -222,6 +222,8 @@ def build_event(
             "suspect_threshold": frame.suspect_threshold,
             "alert_threshold": frame.alert_threshold,
             "f0_stable": frame.f0_stable,
+            "hf_negative": frame.hf_negative,
+            "hf_positive": frame.hf_positive,
             "hf_label": getattr(hf_result, "label", None),
             "hf_class_probs": getattr(hf_result, "class_probs", {}) if hf_result is not None else {},
             "hf_error": getattr(hf_result, "error", None),

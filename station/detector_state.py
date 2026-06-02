@@ -24,6 +24,9 @@ class StationDetectorStateConfig:
     stability_max_f0_std_hz: float = 80.0
     stability_min_score_windows: int = 3
     advisory_threshold: float = 0.70
+    hf_negative_threshold: float = 0.20
+    hf_required_for_single_channel_alert: bool = True
+    hf_negative_caps_status: bool = True
 
 
 @dataclass
@@ -52,6 +55,8 @@ class StationDetectionFrame:
     suspect_threshold: float = 14.0
     alert_threshold: float = 22.0
     f0_stable: bool = False
+    hf_negative: bool = False
+    hf_positive: bool = False
 
 
 def _sigmoid_score(score: float, threshold: float) -> float:
@@ -143,10 +148,27 @@ class StationDetectorState:
         has_alert_harmonic = evidence_score >= self.alert_threshold
         self._record_history(best_f0, evidence_score)
         f0_stable = self._f0_is_stable()
-        advisory_support = max(float(hf_p_drone or 0.0), float(cnn_p_drone or 0.0)) >= self.config.advisory_threshold
+        hf_available = hf_p_drone is not None
+        hf_positive = hf_available and float(hf_p_drone) >= self.config.advisory_threshold
+        hf_negative = hf_available and float(hf_p_drone) < self.config.hf_negative_threshold
+        advisory_support = hf_positive or float(cnn_p_drone or 0.0) >= self.config.advisory_threshold
         strong_channel_agreement = agreement_count >= 2
-        drone_like_ready = advisory_support or f0_stable or strong_channel_agreement
-        alert_ready = f0_stable or strong_channel_agreement
+        single_channel = channels.shape[1] == 1
+        multi_channel = channels.shape[1] > 1
+        negative_hf_veto = self.config.hf_negative_caps_status and hf_negative
+        strong_multichannel_evidence = multi_channel and strong_channel_agreement and f0_stable
+
+        if single_channel:
+            alert_ready = f0_stable and not negative_hf_veto
+            if self.config.hf_required_for_single_channel_alert and hf_available:
+                alert_ready = alert_ready and hf_positive
+            drone_like_ready = not negative_hf_veto and (hf_positive or f0_stable)
+        else:
+            alert_ready = strong_channel_agreement or f0_stable
+            drone_like_ready = advisory_support or f0_stable or strong_channel_agreement
+            if negative_hf_veto:
+                alert_ready = strong_multichannel_evidence
+                drone_like_ready = strong_multichannel_evidence
 
         status, duration = self._status_for_evidence(
             timestamp=timestamp,
@@ -172,6 +194,8 @@ class StationDetectorState:
             agreement_count=agreement_count,
             channel_count=channels.shape[1],
             f0_stable=f0_stable,
+            hf_negative=hf_negative,
+            hf_positive=hf_positive,
         )
 
     def _finish_calibration(self) -> None:
@@ -303,6 +327,8 @@ class StationDetectorState:
         strongest_channel: Optional[int] = None,
         agreement_count: int = 0,
         f0_stable: bool = False,
+        hf_negative: bool = False,
+        hf_positive: bool = False,
     ) -> StationDetectionFrame:
         return StationDetectionFrame(
             status=status,
@@ -320,4 +346,6 @@ class StationDetectorState:
             suspect_threshold=self.suspect_threshold,
             alert_threshold=self.alert_threshold,
             f0_stable=bool(f0_stable),
+            hf_negative=bool(hf_negative),
+            hf_positive=bool(hf_positive),
         )

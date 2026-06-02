@@ -37,6 +37,9 @@ def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | No
         stability_max_f0_std_hz=float(stability_cfg.get("max_f0_std_hz", 80.0)),
         stability_min_score_windows=int(stability_cfg.get("min_score_windows", 3)),
         advisory_threshold=float(hf_cfg.get("threshold", 0.70)),
+        hf_negative_threshold=float(hf_cfg.get("negative_threshold", 0.20)),
+        hf_required_for_single_channel_alert=bool(hf_cfg.get("required_for_single_channel_alert", True)),
+        hf_negative_caps_status=bool(hf_cfg.get("negative_caps_status", True)),
     )
 
 def _station_mode(audio: np.ndarray, direction_allowed: bool) -> str:
@@ -160,6 +163,8 @@ def main():
                 "suspect_threshold": frame.suspect_threshold,
                 "alert_threshold": frame.alert_threshold,
                 "f0_stable": frame.f0_stable,
+                "hf_negative": frame.hf_negative,
+                "hf_positive": frame.hf_positive,
                 "hf_label": last_hf_result.label if last_hf_result is not None else None,
                 "hf_class_probs": last_hf_result.class_probs if last_hf_result is not None else {},
                 "hf_error": last_hf_result.error if last_hf_result is not None else None,

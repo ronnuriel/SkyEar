@@ -156,6 +156,8 @@ def build_event(
             "suspect_threshold": frame.suspect_threshold,
             "alert_threshold": frame.alert_threshold,
             "f0_stable": frame.f0_stable,
+            "hf_negative": frame.hf_negative,
+            "hf_positive": frame.hf_positive,
             **spectrum,
             **spectrogram,
             "harmonic_lines": harmonic_lines,
