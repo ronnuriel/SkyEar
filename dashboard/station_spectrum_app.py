@@ -23,13 +23,10 @@ def _show_figure(fig):
     plt.close(fig)
 
 
-def _select_station(default_station_id: str, latest_by_station: dict) -> str:
-    station_ids = sorted(latest_by_station)
+def _select_station(default_station_id: str, station_ids: list[str]) -> str:
     if not station_ids:
         return st.sidebar.text_input("Station ID", value=default_station_id)
 
-    if default_station_id and default_station_id not in station_ids:
-        station_ids.insert(0, default_station_id)
     index = station_ids.index(default_station_id) if default_station_id in station_ids else 0
     return st.sidebar.selectbox("Station ID", station_ids, index=index)
 
@@ -55,12 +52,18 @@ except Exception as e:
     st.error(f"Could not load station data: {e}")
     latest_by_station = {}
 
-station_id = _select_station(default_station_id, latest_by_station)
+station_ids = sorted(latest_by_station.keys())
+station_id = _select_station(default_station_id, station_ids)
 st.title(f"Live Spectrum - {station_id or 'select a station'}")
 
 event = latest_by_station.get(station_id)
 if not event:
-    st.warning("No event found for this station yet.")
+    st.warning("No event found for this station yet")
+    if station_ids:
+        st.write("Available station IDs:")
+        st.write(station_ids)
+    else:
+        st.info("Available station IDs: none")
 else:
     metadata = event.get("metadata") or {}
     status = event.get("status", "background")

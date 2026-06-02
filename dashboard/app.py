@@ -14,6 +14,7 @@ def _draw_status(status: str):
 
 
 def _render_station_card(
+    station_id: str,
     event: dict,
     fusion_level: int,
     server_url: str,
@@ -21,7 +22,7 @@ def _render_station_card(
     show_inline_mini_spectrum: bool,
 ):
     metadata = event.get("metadata") or {}
-    station_id = event.get("station_id", "unknown")
+    station_id = event.get("station_id") or station_id
     station_name = event.get("station_name")
     status = event.get("status", "background")
     demo_phase = metadata.get("demo_phase")
@@ -109,16 +110,23 @@ except Exception as e:
 st.subheader("Stations")
 try:
     latest_by_station = requests.get(f"{server_url}/stations/latest", timeout=2).json()
-    station_events = sorted(latest_by_station.values(), key=lambda item: item.get("station_id", ""))
+    station_events = sorted(latest_by_station.items())
     if not station_events:
         st.info("No station events yet.")
 
     for start in range(0, len(station_events), max_stations_per_row):
         row_events = station_events[start : start + max_stations_per_row]
         columns = st.columns(len(row_events))
-        for column, event in zip(columns, row_events):
+        for column, (station_id, event) in zip(columns, row_events):
             with column:
-                _render_station_card(event, fusion_level, server_url, spectrum_app_url, show_inline_mini_spectrum)
+                _render_station_card(
+                    station_id,
+                    event,
+                    fusion_level,
+                    server_url,
+                    spectrum_app_url,
+                    show_inline_mini_spectrum,
+                )
 except Exception as e:
     st.error(f"Could not load stations: {e}")
 

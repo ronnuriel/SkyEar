@@ -7,6 +7,9 @@ import numpy as np
 from scipy.signal import resample_poly
 
 
+DEFAULT_MODEL_ID = "preszzz/drone-audio-detection-05-17-trial-0"
+
+
 @dataclass
 class HFDetectionResult:
     p_drone: Optional[float] = None
@@ -18,7 +21,7 @@ class HFDetectionResult:
 class HFDetector:
     def __init__(
         self,
-        model_id: str,
+        model_id: str = DEFAULT_MODEL_ID,
         fallback_drone_label_idx: int = 1,
         threshold: float = 0.70,
     ):
@@ -29,6 +32,10 @@ class HFDetector:
         self._model = None
         self._torch = None
         self._load_error: Optional[str] = None
+
+    @property
+    def model_loaded(self) -> bool:
+        return self._model is not None and self._extractor is not None
 
     def predict(self, audio_mono: np.ndarray, sr: int) -> HFDetectionResult:
         if not self._ensure_loaded():
