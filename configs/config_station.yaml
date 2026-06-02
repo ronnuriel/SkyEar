@@ -10,7 +10,7 @@ audio:
   device_id: 1
   sample_rate: 44100
   channels: 1
-  window_sec: 2.0
+  window_sec: 1.0
 
 detector:
   f0_min: 700

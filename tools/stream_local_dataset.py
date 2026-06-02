@@ -197,6 +197,10 @@ def build_event(
         hf_positive=frame.hf_positive,
         decision_reason=frame.decision_reason,
         operator_label=frame.operator_label,
+        candidate_run=frame.candidate_run,
+        ml_positive_run=frame.ml_positive_run,
+        strong_run=frame.strong_run,
+        estimated_detection_delay_sec=frame.estimated_detection_delay_sec,
         rms=frame.rms,
         peak=frame.peak,
         duration_sec=frame.duration_sec,
@@ -234,6 +238,10 @@ def build_event(
             "hf_positive": frame.hf_positive,
             "decision_reason": frame.decision_reason,
             "operator_label": frame.operator_label,
+            "candidate_run": frame.candidate_run,
+            "ml_positive_run": frame.ml_positive_run,
+            "strong_run": frame.strong_run,
+            "estimated_detection_delay_sec": frame.estimated_detection_delay_sec,
             "hf_label": getattr(hf_result, "label", None),
             "hf_class_probs": getattr(hf_result, "class_probs", {}) if hf_result is not None else {},
             "hf_error": getattr(hf_result, "error", None),
@@ -256,6 +264,7 @@ def apply_local_eval_guards(event: AcousticEvent) -> AcousticEvent:
     hf_negative = event.hf_p_drone is not None and float(event.hf_p_drone) < 0.20
     status = event.status.value if hasattr(event.status, "value") else str(event.status)
     operator_label = event.operator_label or metadata.get("operator_label") or "background"
+    candidate_run = int(event.candidate_run or metadata.get("candidate_run") or 0)
 
     if hf_negative and combined < 0.30 and status in {"alert", "drone_like"}:
         if max(harmonic, raw_harmonic) >= 0.45:
@@ -273,7 +282,7 @@ def apply_local_eval_guards(event: AcousticEvent) -> AcousticEvent:
         metadata["decision_reason"] = reason
 
     label_allowed = (
-        (ml is not None and ml >= 0.90 and combined >= 0.45)
+        (candidate_run >= 3 and ml is not None and ml >= 0.90 and combined >= 0.45)
         or status == "alert"
         or int(event.channel_agreement_count or 0) >= 2
     )
@@ -286,40 +295,106 @@ def apply_local_eval_guards(event: AcousticEvent) -> AcousticEvent:
     return event
 
 
+REPORT_FIELDNAMES = [
+    "file_name",
+    "file_path",
+    "label",
+    "distance_category",
+    "window_idx",
+    "timestamp_unix",
+    "status",
+    "operator_label",
+    "decision_reason",
+    "candidate_run",
+    "ml_positive_run",
+    "strong_run",
+    "estimated_detection_delay_sec",
+    "ml_drone_pct",
+    "ml_drone_pct_smoothed",
+    "hf_p_drone",
+    "hf_negative",
+    "hf_positive",
+    "harmonic_score",
+    "harmonic_score_smoothed",
+    "harmonic_evidence_pct",
+    "harmonic_evidence_pct_raw",
+    "harmonic_evidence_pct_smoothed",
+    "combined_drone_evidence_pct",
+    "best_f0_hz",
+    "raw_best_f0_hz",
+    "canonical_best_f0_hz",
+    "f0_stable",
+    "f0_family_stable",
+    "confidence",
+    "rms",
+    "window_rms",
+    "padding_ratio",
+    "channel_count",
+    "channel_agreement_count",
+    "strongest_channel",
+    "suspect_threshold",
+    "alert_threshold",
+]
+
+
+def _metadata_or_event(event: AcousticEvent, metadata: dict[str, Any], name: str):
+    value = getattr(event, name, None)
+    if value is None:
+        value = metadata.get(name)
+    return value
+
+
 def _report_rows(events: list[AcousticEvent]) -> Iterator[dict[str, Any]]:
     for event in events:
         metadata = event.metadata
+        file_path = metadata.get("file_path")
         yield {
+            "file_name": None if file_path is None else Path(str(file_path)).name,
             "file_path": metadata.get("file_path"),
             "label": metadata.get("label"),
             "distance_category": metadata.get("distance_category"),
+            "window_idx": metadata.get("window_idx"),
+            "timestamp_unix": event.timestamp_unix,
             "status": event.status.value if hasattr(event.status, "value") else event.status,
-            "confidence": event.confidence,
+            "operator_label": _metadata_or_event(event, metadata, "operator_label"),
+            "decision_reason": _metadata_or_event(event, metadata, "decision_reason"),
+            "candidate_run": _metadata_or_event(event, metadata, "candidate_run"),
+            "ml_positive_run": _metadata_or_event(event, metadata, "ml_positive_run"),
+            "strong_run": _metadata_or_event(event, metadata, "strong_run"),
+            "estimated_detection_delay_sec": _metadata_or_event(event, metadata, "estimated_detection_delay_sec"),
+            "ml_drone_pct": _metadata_or_event(event, metadata, "ml_drone_pct"),
+            "ml_drone_pct_smoothed": _metadata_or_event(event, metadata, "ml_drone_pct_smoothed"),
             "hf_p_drone": event.hf_p_drone,
-            "hf_label": metadata.get("hf_label"),
+            "hf_negative": _metadata_or_event(event, metadata, "hf_negative"),
+            "hf_positive": _metadata_or_event(event, metadata, "hf_positive"),
             "harmonic_score": event.harmonic_score,
+            "harmonic_score_smoothed": _metadata_or_event(event, metadata, "harmonic_score_smoothed"),
+            "harmonic_evidence_pct": _metadata_or_event(event, metadata, "harmonic_evidence_pct"),
+            "harmonic_evidence_pct_raw": metadata.get("harmonic_evidence_pct_raw"),
+            "harmonic_evidence_pct_smoothed": _metadata_or_event(event, metadata, "harmonic_evidence_pct_smoothed"),
+            "combined_drone_evidence_pct": _metadata_or_event(event, metadata, "combined_drone_evidence_pct"),
             "best_f0_hz": event.best_f0_hz,
-            "f0_stable": metadata.get("f0_stable"),
+            "raw_best_f0_hz": _metadata_or_event(event, metadata, "raw_best_f0_hz"),
+            "canonical_best_f0_hz": _metadata_or_event(event, metadata, "canonical_best_f0_hz"),
+            "f0_stable": _metadata_or_event(event, metadata, "f0_stable"),
+            "f0_family_stable": _metadata_or_event(event, metadata, "f0_family_stable"),
+            "confidence": event.confidence,
+            "rms": event.rms,
+            "window_rms": metadata.get("window_rms"),
+            "padding_ratio": metadata.get("padding_ratio"),
+            "channel_count": event.channel_count,
+            "channel_agreement_count": event.channel_agreement_count,
+            "strongest_channel": event.strongest_channel,
+            "suspect_threshold": metadata.get("suspect_threshold"),
+            "alert_threshold": metadata.get("alert_threshold"),
         }
 
 
 def write_report(path: Path, events: list[AcousticEvent]) -> None:
-    fieldnames = [
-        "file_path",
-        "label",
-        "distance_category",
-        "status",
-        "confidence",
-        "hf_p_drone",
-        "hf_label",
-        "harmonic_score",
-        "best_f0_hz",
-        "f0_stable",
-    ]
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=REPORT_FIELDNAMES)
         writer.writeheader()
         writer.writerows(_report_rows(events))
 
@@ -333,7 +408,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--station-id", default="local_dataset_001")
     parser.add_argument("--channels", type=int, default=1)
     parser.add_argument("--sample-rate", type=int, default=44100)
-    parser.add_argument("--window-sec", type=float, default=2.0)
+    parser.add_argument("--window-sec", type=float, default=1.0)
     parser.add_argument("--max-files", type=int, default=50)
     parser.add_argument("--max-windows", type=int, default=None)
     parser.add_argument("--label-filter")
@@ -377,6 +452,7 @@ def run(args: argparse.Namespace) -> None:
             detector_state = detector_state_from_args(args)
             last_hf_result = None
         files_seen += 1
+        file_window_idx = 0
 
         for window, padding_ratio in iter_audio_windows_with_padding(
             mono,
@@ -412,12 +488,14 @@ def run(args: argparse.Namespace) -> None:
             )
             event.metadata["padding_ratio"] = padding_ratio
             event.metadata["window_rms"] = window_rms
+            event.metadata["window_idx"] = file_window_idx
             event = apply_local_eval_guards(event)
             if not args.no_post:
                 requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
             events.append(event)
             print(format_detection_log(f"{path.name} {metadata.get('label')} {metadata.get('distance_category')}", event))
             windows_sent += 1
+            file_window_idx += 1
             if args.realtime:
                 time.sleep(max(0.0, float(args.window_sec) - (time.time() - loop_start)))
 

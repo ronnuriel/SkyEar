@@ -170,8 +170,11 @@ def test_strong_ml_with_harmonic_support_becomes_drone_like():
     state = _calibrated_state(min_alert_threshold=160.0)
 
     state.update(_harmonic(), SR, 3.0, hf_p_drone=0.99)
-    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.99)
+    second = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.99)
+    frame = state.update(_harmonic(), SR, 6.0, hf_p_drone=0.99)
 
+    assert second.status == "suspect"
+    assert second.operator_label == "local_drone_candidate"
     assert frame.harmonic_evidence_pct >= 0.45
     assert frame.harmonic_evidence_pct_smoothed >= 0.45
     assert frame.status == "drone_like"
@@ -191,7 +194,121 @@ def test_combined_evidence_scores_strong_ml_partial_harmonic():
     )
     assert frame.combined_drone_evidence_pct == expected
     assert frame.combined_drone_evidence_pct >= 0.60
+    assert frame.operator_label == "local_drone_candidate"
+    assert frame.status == "suspect"
+
+
+def test_single_ml_combined_spike_caps_to_candidate_not_drone_like():
+    state = _calibrated_state(min_alert_threshold=160.0, smoothing_enabled=False)
+
+    for idx in range(9):
+        state.update(_quiet(), SR, 3.0 + idx, hf_p_drone=0.001)
+    frame = state.update(_harmonic(), SR, 12.0, hf_p_drone=0.95)
+
+    assert frame.ml_drone_pct >= 0.90
+    assert frame.combined_drone_evidence_pct >= 0.60
+    assert frame.status == "suspect"
+    assert frame.operator_label == "ml_drone_candidate"
+
+
+def test_one_high_hf_background_spike_stays_candidate_not_drone_like():
+    state = _calibrated_state(smoothing_enabled=False)
+
+    frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.99)
+
+    assert frame.ml_drone_pct >= 0.90
+    assert frame.combined_drone_evidence_pct == 0.0
+    assert frame.status == "suspect"
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.candidate_run == 1
+    assert frame.ml_positive_run == 1
+    assert frame.strong_run == 0
+
+
+def test_two_ml_high_windows_in_last_three_create_local_candidate():
+    state = _calibrated_state(smoothing_enabled=False)
+
+    state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
+    state.update(_quiet(), SR, 4.0, hf_p_drone=0.05)
+    frame = state.update(_quiet(), SR, 5.0, hf_p_drone=0.96)
+
+    assert state._ml_candidate_persistent() is True
+    assert frame.status == "suspect"
+    assert frame.operator_label == "local_drone_candidate"
+    assert frame.candidate_run == 1
+    assert frame.ml_positive_run == 1
+
+
+def test_two_consecutive_drone_candidates_create_local_candidate():
+    state = _calibrated_state(smoothing_enabled=False)
+
+    state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
+    frame = state.update(_quiet(), SR, 4.0, hf_p_drone=0.96)
+
+    assert frame.status == "suspect"
+    assert frame.operator_label == "local_drone_candidate"
+    assert frame.candidate_run == 2
+    assert frame.ml_positive_run == 2
+    assert frame.estimated_detection_delay_sec == 1.0
+
+
+def test_three_consecutive_candidates_create_strong_local_candidate_without_drone_like():
+    state = _calibrated_state(smoothing_enabled=False)
+
+    state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
+    state.update(_quiet(), SR, 4.0, hf_p_drone=0.96)
+    frame = state.update(_quiet(), SR, 5.0, hf_p_drone=0.97)
+
+    assert frame.status == "suspect"
+    assert frame.operator_label == "strong_local_candidate"
+    assert frame.candidate_run == 3
+    assert frame.ml_positive_run == 3
+    assert frame.strong_run == 3
+    assert frame.combined_drone_evidence_pct == 0.0
+
+
+def test_three_consecutive_ml_combined_windows_become_drone_like():
+    state = _calibrated_state(min_alert_threshold=160.0, smoothing_enabled=False)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.99)
+    state.update(_harmonic(), SR, 4.5, hf_p_drone=0.99)
+    frame = state.update(_harmonic(), SR, 6.0, hf_p_drone=0.99)
+
+    assert frame.ml_drone_pct >= 0.90
+    assert frame.combined_drone_evidence_pct >= 0.60
+    assert frame.f0_family_stable is True
     assert frame.status == "drone_like"
+    assert frame.operator_label == "drone_like"
+    assert frame.candidate_run == 3
+    assert frame.strong_run == 3
+
+
+def test_three_ml_high_windows_in_last_five_with_support_become_drone_like():
+    state = _calibrated_state(min_alert_threshold=160.0, smoothing_enabled=False)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.99)
+    state.update(_quiet(), SR, 4.0, hf_p_drone=0.01)
+    state.update(_harmonic(), SR, 5.0, hf_p_drone=0.98)
+    state.update(_quiet(), SR, 6.0, hf_p_drone=0.01)
+    frame = state.update(_harmonic(), SR, 7.0, hf_p_drone=0.97)
+
+    assert sum(1 for value in state.ml_strong_history[-5:] if value) == 3
+    assert frame.combined_drone_evidence_pct >= 0.35
+    assert frame.status == "drone_like"
+    assert frame.operator_label == "drone_like"
+
+
+def test_background_and_helicopter_like_single_spikes_do_not_create_drone_like():
+    background_state = _calibrated_state(smoothing_enabled=False)
+    background = background_state.update(_quiet(), SR, 3.0, hf_p_drone=0.99)
+
+    helicopter_state = _calibrated_state(min_alert_threshold=160.0, smoothing_enabled=False)
+    helicopter_like = helicopter_state.update(_harmonic(), SR, 3.0, hf_p_drone=0.99)
+
+    assert background.status == "suspect"
+    assert background.operator_label == "ml_drone_candidate"
+    assert helicopter_like.status == "suspect"
+    assert helicopter_like.operator_label == "ml_drone_candidate"
 
 
 def test_hf_missing_single_channel_keeps_existing_harmonic_behavior():
@@ -270,3 +387,63 @@ def test_f0_family_stability_treats_octaves_as_one_family():
 
     assert first == 520
     assert second == 520
+
+
+def test_background_label_forces_status_not_above_suspect():
+    state = _calibrated_state()
+
+    status, label = state._enforce_status_label_consistency(
+        status="drone_like",
+        operator_label="background",
+        has_suspect_harmonic=True,
+        harmonic_evidence_pct=0.2,
+        ml_drone_pct=0.1,
+        combined_drone_evidence_pct=0.1,
+        hf_p_drone=None,
+        channel_count=1,
+        agreement_count=1,
+        f0_family_stable=False,
+    )
+
+    assert status == "suspect"
+    assert label == "background"
+
+
+def test_non_drone_harmonic_label_forces_status_not_above_suspect():
+    state = _calibrated_state()
+
+    status, label = state._enforce_status_label_consistency(
+        status="alert",
+        operator_label="non_drone_harmonic",
+        has_suspect_harmonic=True,
+        harmonic_evidence_pct=0.9,
+        ml_drone_pct=0.01,
+        combined_drone_evidence_pct=0.01,
+        hf_p_drone=0.01,
+        channel_count=1,
+        agreement_count=1,
+        f0_family_stable=True,
+    )
+
+    assert status == "suspect"
+    assert label == "non_drone_harmonic"
+
+
+def test_background_like_single_channel_combined_low_cannot_be_drone_like():
+    state = _calibrated_state()
+
+    status, label = state._enforce_status_label_consistency(
+        status="drone_like",
+        operator_label="drone_like",
+        has_suspect_harmonic=True,
+        harmonic_evidence_pct=0.2,
+        ml_drone_pct=0.2,
+        combined_drone_evidence_pct=0.2,
+        hf_p_drone=0.2,
+        channel_count=1,
+        agreement_count=1,
+        f0_family_stable=True,
+    )
+
+    assert status == "suspect"
+    assert label != "drone_like"

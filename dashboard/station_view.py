@@ -52,6 +52,21 @@ def _score_value(event: dict, name: str) -> float | None:
     return float(np.clip(float(value), 0.0, 1.0))
 
 
+def _raw_value(event: dict, name: str):
+    metadata = event.get("metadata") or {}
+    value = event.get(name)
+    if value is None:
+        value = metadata.get(name)
+    return value
+
+
+def _int_value(event: dict, name: str) -> int:
+    value = _raw_value(event, name)
+    if value is None:
+        return 0
+    return int(value)
+
+
 def format_pct(value: float | None) -> str:
     if value is None:
         return "n/a"
@@ -166,6 +181,8 @@ OPERATOR_LABEL_TEXT = {
     "background": "BACKGROUND",
     "non_drone_harmonic": "NON-DRONE HARMONIC",
     "ml_drone_candidate": "ML DRONE CANDIDATE",
+    "local_drone_candidate": "LOCAL DRONE CANDIDATE",
+    "strong_local_candidate": "STRONG LOCAL CANDIDATE",
     "drone_like": "DRONE-LIKE",
     "alert": "ALERT",
 }
@@ -188,6 +205,10 @@ def decision_display_state(event: dict) -> dict[str, str]:
         return {"label": format_operator_label(label), "harmonic_color": "#dc2626", "ml_color": "#dc2626", "combined_color": "#dc2626"}
     if label == "drone_like":
         return {"label": "DRONE-LIKE", "harmonic_color": "#dc2626", "ml_color": "#ea580c", "combined_color": "#dc2626"}
+    if label == "strong_local_candidate":
+        return {"label": "STRONG LOCAL CANDIDATE", "harmonic_color": "#ea580c", "ml_color": "#2563eb", "combined_color": "#ea580c"}
+    if label == "local_drone_candidate":
+        return {"label": "LOCAL DRONE CANDIDATE", "harmonic_color": "#ca8a04", "ml_color": "#2563eb", "combined_color": "#ca8a04"}
     if combined >= 0.60:
         return {"label": "STRONG ML DRONE CANDIDATE", "harmonic_color": "#ea580c", "ml_color": "#2563eb", "combined_color": "#dc2626"}
     if harmonic >= 0.60 and ml_value >= 0.60:
@@ -209,6 +230,11 @@ def render_decision_bars(st_module, event: dict) -> None:
     ml_width = 0.0 if ml is None else ml
     reason = event.get("decision_reason") or (event.get("metadata") or {}).get("decision_reason")
     reason_html = f"<div class='sky-score-reason'>{reason}</div>" if reason else ""
+    candidate_run = _int_value(event, "candidate_run")
+    ml_positive_run = _int_value(event, "ml_positive_run")
+    strong_run = _int_value(event, "strong_run")
+    delay = _raw_value(event, "estimated_detection_delay_sec")
+    delay_text = "n/a" if delay is None else f"{float(delay):.1f}s"
     st_module.markdown(
         f"""
 <div class="sky-score-box">
@@ -219,6 +245,7 @@ def render_decision_bars(st_module, event: dict) -> None:
   <div class="sky-score-track"><div style="width:{ml_width * 100:.0f}%;background:{display['ml_color']};"></div></div>
   <div class="sky-score-row"><span>Combined drone evidence</span><b>{format_pct(combined)}</b></div>
   <div class="sky-score-track"><div style="width:{combined * 100:.0f}%;background:{display['combined_color']};"></div></div>
+  <div class="sky-score-row"><span>Persistence</span><b>candidate={candidate_run} ML={ml_positive_run} strong={strong_run} delay={delay_text}</b></div>
   {reason_html}
 </div>
 <style>

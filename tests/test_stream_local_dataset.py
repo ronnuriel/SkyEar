@@ -6,13 +6,16 @@ from scipy.io import wavfile
 from tools.stream_hf_dataset import mono_to_simulated_channels
 from tools.stream_hf_dataset import format_detection_log
 from tools.stream_local_dataset import (
+    REPORT_FIELDNAMES,
     apply_local_eval_guards,
     build_event,
     detector_state_from_args,
     infer_path_metadata,
     iter_audio_windows_with_padding,
     metadata_matches,
+    parse_args,
     read_audio_mono,
+    _report_rows,
 )
 
 
@@ -226,3 +229,50 @@ def test_hf_low_high_harmonic_is_non_drone_harmonic_not_alert():
     assert event is not None
     assert event.status.value != "alert"
     assert event.operator_label == "non_drone_harmonic"
+
+
+def test_report_row_contains_new_decision_fields(tmp_path):
+    sample_rate = 16000
+    t = np.arange(sample_rate, dtype=np.float32) / sample_rate
+    audio = (0.1 * np.sin(2 * np.pi * 700 * t)).astype(np.float32)
+    wav_path = tmp_path / "Distant" / "drone" / "sample.wav"
+    wav_path.parent.mkdir(parents=True)
+    wavfile.write(wav_path, sample_rate, audio)
+
+    mono, source_sr = read_audio_mono(wav_path)
+    detector_state = detector_state_from_args(_Args())
+    metadata = infer_path_metadata(wav_path, root=tmp_path)
+    event = build_event(
+        station_id="local_test",
+        root=tmp_path,
+        file_path=wav_path,
+        label=metadata["label"],
+        distance_category=metadata["distance_category"],
+        audio=mono_to_simulated_channels(mono, 1),
+        sample_rate=source_sr,
+        timestamp=123.0,
+        detector_state=detector_state,
+        hf_p_drone=0.99,
+    )
+    event.metadata["window_idx"] = 7
+    event.metadata["window_rms"] = 0.123
+    event.metadata["padding_ratio"] = 0.0
+
+    row = next(_report_rows([event]))
+
+    assert set(REPORT_FIELDNAMES) == set(row)
+    assert "operator_label" in row
+    assert "combined_drone_evidence_pct" in row
+    assert "harmonic_evidence_pct_smoothed" in row
+    assert "ml_drone_pct" in row
+    assert "decision_reason" in row
+    assert row["file_name"] == "sample.wav"
+    assert row["window_idx"] == 7
+
+
+def test_parse_args_defaults_window_sec_to_one_second(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["stream_local_dataset", "--root", "data"])
+
+    args = parse_args()
+
+    assert args.window_sec == 1.0

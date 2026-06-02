@@ -40,6 +40,10 @@ class StationDetectorStateConfig:
     drone_like_exit_pct: float = 0.25
     min_alert_windows: int = 2
     min_drone_like_windows: int = 2
+    min_ml_candidate_windows: int = 2
+    min_ml_drone_like_windows: int = 3
+    ml_spike_single_window_caps_to_candidate: bool = True
+    ml_strong_recent_window_sec: float = 3.0
     f0_family_tolerance_hz: float = 140.0
 
 
@@ -80,6 +84,10 @@ class StationDetectionFrame:
     hf_positive: bool = False
     decision_reason: str = "no acoustic evidence"
     operator_label: str = "background"
+    candidate_run: int = 0
+    ml_positive_run: int = 0
+    strong_run: int = 0
+    estimated_detection_delay_sec: Optional[float] = None
     raw_best_f0_hz: Optional[int] = None
     canonical_best_f0_hz: Optional[int] = None
     f0_family_stable: bool = False
@@ -131,6 +139,11 @@ class StationDetectorState:
         self.raw_f0_history: list[Optional[int]] = []
         self.operator_state_history: list[str] = []
         self._canonical_f0_history: list[Optional[int]] = []
+        self.ml_strong_history: list[bool] = []
+        self.combined_strong_history: list[bool] = []
+        self.harmonic_partial_history: list[bool] = []
+        self.strong_candidate_history: list[bool] = []
+        self.ml_window_timestamp_history: list[float] = []
         self._alert_below_since: Optional[float] = None
 
     def update(
@@ -187,13 +200,26 @@ class StationDetectorState:
         canonical_best_f0 = self._canonical_f0_family(raw_best_f0)
         harmonic_evidence_pct_raw = self._harmonic_evidence_pct(evidence_score)
         ml_drone_pct = hf_p_drone if hf_p_drone is not None else cnn_p_drone
-        self._record_window_history(evidence_score, harmonic_evidence_pct_raw, hf_p_drone, raw_best_f0, canonical_best_f0)
+        ml_drone_pct_smoothed = ml_drone_pct
+        ml_strong = ml_drone_pct_smoothed is not None and float(ml_drone_pct_smoothed) >= self.config.ml_strong_threshold
+        self._record_window_history(
+            evidence_score,
+            harmonic_evidence_pct_raw,
+            hf_p_drone,
+            raw_best_f0,
+            canonical_best_f0,
+            timestamp=timestamp,
+            ml_strong=ml_strong,
+        )
         harmonic_score_smoothed = self._smoothed(self.raw_harmonic_score_history)
         harmonic_evidence_pct_smoothed = self._smoothed(self.harmonic_evidence_pct_history)
-        ml_drone_pct_smoothed = ml_drone_pct
         combined_drone_evidence_pct = _combined_drone_evidence(
             ml_drone_pct_smoothed,
             harmonic_evidence_pct_smoothed,
+        )
+        self._update_current_ml_support(
+            combined_drone_evidence_pct=combined_drone_evidence_pct,
+            harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
         )
         has_suspect_harmonic = harmonic_evidence_pct_raw > 0.0 or evidence_score >= self.suspect_threshold
         self._record_history(canonical_best_f0, harmonic_score_smoothed)
@@ -203,7 +229,16 @@ class StationDetectorState:
         hf_available = hf_p_drone is not None
         hf_positive = hf_available and float(hf_p_drone) >= self.config.advisory_threshold
         hf_negative = hf_available and float(hf_p_drone) < self.config.hf_negative_threshold
-        ml_strong = ml_drone_pct_smoothed is not None and float(ml_drone_pct_smoothed) >= self.config.ml_strong_threshold
+        ml_candidate_persistent = self._ml_candidate_persistent()
+        strong_local_candidate = self._strong_local_candidate_persistent()
+        ml_drone_like_persistent = self._ml_drone_like_persistent(
+            f0_family_stable=f0_family_stable,
+            harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
+        )
+        ml_positive_run = self._current_true_run(self.ml_strong_history)
+        candidate_run = ml_positive_run
+        strong_run = candidate_run if strong_local_candidate else self._current_true_run(self.strong_candidate_history)
+        estimated_detection_delay_sec = self._current_run_elapsed_sec(self.ml_strong_history)
         advisory_support = hf_positive or float(cnn_p_drone or 0.0) >= self.config.advisory_threshold
         strong_channel_agreement = agreement_count >= 2
         single_channel = channels.shape[1] == 1
@@ -229,6 +264,7 @@ class StationDetectorState:
             harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
             combined_drone_evidence_pct=combined_drone_evidence_pct,
             ml_strong=ml_strong,
+            ml_drone_like_persistent=ml_drone_like_persistent,
             hf_negative=hf_negative,
             drone_like_ready=drone_like_ready,
             alert_ready=alert_ready,
@@ -247,14 +283,34 @@ class StationDetectorState:
                 or (ml_strong and decision_harmonic_pct >= 0.40)
             )
         ):
-            status = "drone_like"
-            self._last_active_status = status
+            if ml_drone_like_persistent:
+                status = "drone_like"
+                self._last_active_status = status
+            elif self.config.ml_spike_single_window_caps_to_candidate:
+                status = "suspect"
+                self._last_active_status = status
         operator_label = self._operator_label(
             status=status,
             harmonic_evidence_pct=decision_harmonic_pct,
             combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_negative=hf_negative,
             ml_strong=ml_strong,
+            ml_candidate_persistent=ml_candidate_persistent,
+            strong_local_candidate=strong_local_candidate,
+            ml_drone_like_persistent=ml_drone_like_persistent,
+        )
+        status, operator_label = self._enforce_status_label_consistency(
+            status=status,
+            operator_label=operator_label,
+            has_suspect_harmonic=has_suspect_harmonic,
+            harmonic_evidence_pct=decision_harmonic_pct,
+            ml_drone_pct=ml_drone_pct_smoothed,
+            combined_drone_evidence_pct=combined_drone_evidence_pct,
+            hf_p_drone=hf_p_drone,
+            channel_count=channels.shape[1],
+            agreement_count=agreement_count,
+            f0_family_stable=f0_family_stable,
+            ml_drone_like_persistent=ml_drone_like_persistent,
         )
         decision_reason = self._decision_reason(
             status=status,
@@ -297,6 +353,10 @@ class StationDetectorState:
             hf_positive=hf_positive,
             decision_reason=decision_reason,
             operator_label=operator_label,
+            candidate_run=candidate_run,
+            ml_positive_run=ml_positive_run,
+            strong_run=strong_run,
+            estimated_detection_delay_sec=estimated_detection_delay_sec,
             raw_best_f0_hz=raw_best_f0,
             canonical_best_f0_hz=canonical_best_f0,
             f0_family_stable=f0_family_stable,
@@ -386,6 +446,7 @@ class StationDetectorState:
         harmonic_evidence_pct_smoothed: float,
         combined_drone_evidence_pct: float,
         ml_strong: bool,
+        ml_drone_like_persistent: bool,
         hf_negative: bool,
         drone_like_ready: bool,
         alert_ready: bool,
@@ -413,8 +474,9 @@ class StationDetectorState:
                 (
                     harmonic_evidence_pct_smoothed >= self.config.alert_enter_pct
                     and self._recent_pct_all(self.config.alert_enter_pct, self.config.min_alert_windows)
+                    and (not ml_strong or ml_drone_like_persistent)
                 )
-                or combined_drone_evidence_pct >= 0.75
+                or (combined_drone_evidence_pct >= 0.75 and ml_drone_like_persistent)
             ) and duration >= self.config.min_alert_duration_sec and alert_ready
             if alert_enter_ready:
                 self._last_active_status = "alert"
@@ -425,12 +487,14 @@ class StationDetectorState:
                 self._last_active_status = "suspect"
                 return "suspect", duration
 
-            drone_like_enter_ready = (
-                (
-                    harmonic_evidence_pct_smoothed >= self.config.drone_like_enter_pct
-                    and self._recent_pct_all(self.config.drone_like_enter_pct, self.config.min_drone_like_windows)
-                )
-                or combined_drone_evidence_pct >= 0.60
+            harmonic_drone_like_enter_ready = (
+                harmonic_evidence_pct_smoothed >= self.config.drone_like_enter_pct
+                and self._recent_pct_all(self.config.drone_like_enter_pct, self.config.min_drone_like_windows)
+            )
+            if ml_strong and not ml_drone_like_persistent:
+                harmonic_drone_like_enter_ready = False
+            drone_like_enter_ready = harmonic_drone_like_enter_ready or (
+                combined_drone_evidence_pct >= 0.60 and ml_drone_like_persistent
             )
             if drone_like_enter_ready and drone_like_ready:
                 self._last_active_status = "drone_like"
@@ -476,17 +540,83 @@ class StationDetectorState:
         hf_p_drone: Optional[float],
         raw_f0_hz: Optional[int],
         canonical_f0_hz: Optional[int],
+        timestamp: Optional[float] = None,
+        ml_strong: bool = False,
     ) -> None:
         self.raw_harmonic_score_history.append(float(harmonic_score))
         self.harmonic_evidence_pct_history.append(float(harmonic_evidence_pct))
         self.hf_p_history.append(None if hf_p_drone is None else float(hf_p_drone))
         self.raw_f0_history.append(raw_f0_hz)
         self._canonical_f0_history.append(canonical_f0_hz)
+        self.ml_strong_history.append(bool(ml_strong))
+        self.combined_strong_history.append(False)
+        self.harmonic_partial_history.append(False)
+        self.strong_candidate_history.append(False)
+        self.ml_window_timestamp_history.append(0.0 if timestamp is None else float(timestamp))
         self._trim_history(self.raw_harmonic_score_history)
         self._trim_history(self.harmonic_evidence_pct_history)
         self._trim_history(self.hf_p_history)
         self._trim_history(self.raw_f0_history)
         self._trim_history(self._canonical_f0_history)
+        self._trim_history(self.ml_strong_history)
+        self._trim_history(self.combined_strong_history)
+        self._trim_history(self.harmonic_partial_history)
+        self._trim_history(self.strong_candidate_history)
+        self._trim_history(self.ml_window_timestamp_history)
+
+    def _update_current_ml_support(self, combined_drone_evidence_pct: float, harmonic_evidence_pct_smoothed: float) -> None:
+        if self.combined_strong_history:
+            self.combined_strong_history[-1] = float(combined_drone_evidence_pct) >= 0.35
+        if self.harmonic_partial_history:
+            self.harmonic_partial_history[-1] = float(harmonic_evidence_pct_smoothed) >= 0.25
+        if self.strong_candidate_history and self.ml_strong_history:
+            has_support = (
+                float(combined_drone_evidence_pct) >= 0.35
+                or float(harmonic_evidence_pct_smoothed) >= 0.25
+            )
+            self.strong_candidate_history[-1] = bool(self.ml_strong_history[-1] and has_support)
+
+    def _ml_candidate_persistent(self) -> bool:
+        required = max(1, int(self.config.min_ml_candidate_windows))
+        recent_window_count = max(3, required)
+        if len(self.ml_strong_history) < required:
+            return False
+        return sum(1 for value in self.ml_strong_history[-recent_window_count:] if value) >= required
+
+    def _strong_local_candidate_persistent(self) -> bool:
+        required = max(1, int(self.config.min_ml_drone_like_windows))
+        recent_window_count = max(5, required)
+        if len(self.ml_strong_history) < required:
+            return False
+        return sum(1 for value in self.ml_strong_history[-recent_window_count:] if value) >= required
+
+    def _ml_drone_like_persistent(self, f0_family_stable: bool, harmonic_evidence_pct_smoothed: float) -> bool:
+        ml_required = max(1, int(self.config.min_ml_drone_like_windows))
+        recent_window_count = max(5, ml_required)
+        if len(self.ml_strong_history) < ml_required:
+            return False
+        ml_count = sum(1 for value in self.ml_strong_history[-recent_window_count:] if value)
+        has_recent_combined_support = any(self.combined_strong_history[-recent_window_count:])
+        has_harmonic_support = float(harmonic_evidence_pct_smoothed) >= 0.25 or any(
+            self.harmonic_partial_history[-recent_window_count:]
+        )
+        return ml_count >= ml_required and (
+            has_recent_combined_support or has_harmonic_support or f0_family_stable
+        )
+
+    def _current_true_run(self, values: list[bool]) -> int:
+        run = 0
+        for value in reversed(values):
+            if not value:
+                break
+            run += 1
+        return run
+
+    def _current_run_elapsed_sec(self, values: list[bool]) -> Optional[float]:
+        run = self._current_true_run(values)
+        if run <= 0 or len(self.ml_window_timestamp_history) < run:
+            return None
+        return max(0.0, float(self.ml_window_timestamp_history[-1]) - float(self.ml_window_timestamp_history[-run]))
 
     def _smoothed(self, values: list[float]) -> float:
         if not values:
@@ -575,18 +705,82 @@ class StationDetectorState:
         combined_drone_evidence_pct: float,
         hf_negative: bool,
         ml_strong: bool,
+        ml_candidate_persistent: bool,
+        strong_local_candidate: bool,
+        ml_drone_like_persistent: bool,
     ) -> str:
         if status == "alert":
             return "alert"
         if hf_negative and harmonic_evidence_pct >= 0.75:
             return "non_drone_harmonic"
         if status == "drone_like":
+            return "drone_like" if (ml_drone_like_persistent or not ml_strong) else "ml_drone_candidate"
+        if combined_drone_evidence_pct >= 0.60 and ml_drone_like_persistent:
             return "drone_like"
-        if combined_drone_evidence_pct >= 0.60:
-            return "drone_like"
-        if ml_strong:
+        if strong_local_candidate:
+            return "strong_local_candidate"
+        if ml_candidate_persistent:
+            return "local_drone_candidate"
+        if ml_strong or ml_candidate_persistent:
             return "ml_drone_candidate"
         return "background"
+
+    def _enforce_status_label_consistency(
+        self,
+        status: str,
+        operator_label: str,
+        has_suspect_harmonic: bool,
+        harmonic_evidence_pct: float,
+        ml_drone_pct: Optional[float],
+        combined_drone_evidence_pct: float,
+        hf_p_drone: Optional[float],
+        channel_count: int,
+        agreement_count: int,
+        f0_family_stable: bool,
+        ml_drone_like_persistent: bool = True,
+    ) -> tuple[str, str]:
+        strong_multichannel_evidence = channel_count > 1 and agreement_count >= 2 and f0_family_stable
+        hf_negative = hf_p_drone is not None and float(hf_p_drone) < self.config.hf_negative_threshold
+        ml_low = ml_drone_pct is not None and float(ml_drone_pct) < self.config.advisory_threshold
+
+        if operator_label == "background" and status in {"drone_like", "alert"}:
+            status = "suspect" if has_suspect_harmonic else "background"
+
+        if operator_label == "non_drone_harmonic" and status in {"drone_like", "alert"}:
+            status = "suspect"
+
+        if (
+            channel_count == 1
+            and status == "drone_like"
+            and ml_low
+            and combined_drone_evidence_pct < 0.60
+        ):
+            status = "suspect" if has_suspect_harmonic else "background"
+
+        if hf_negative and status in {"drone_like", "alert"} and not strong_multichannel_evidence:
+            status = "suspect" if harmonic_evidence_pct > 0.0 or has_suspect_harmonic else "background"
+
+        if status != "alert" and operator_label == "drone_like":
+            label_allowed = (
+                (
+                    ml_drone_like_persistent
+                    and ml_drone_pct is not None
+                    and float(ml_drone_pct) >= self.config.ml_strong_threshold
+                    and combined_drone_evidence_pct >= 0.45
+                )
+                or strong_multichannel_evidence
+            )
+            if not label_allowed:
+                if ml_drone_pct is not None and float(ml_drone_pct) >= self.config.ml_strong_threshold:
+                    operator_label = "ml_drone_candidate"
+                elif harmonic_evidence_pct > 0.0:
+                    operator_label = "background"
+                else:
+                    operator_label = "background"
+                if status == "drone_like":
+                    status = "suspect" if has_suspect_harmonic else "background"
+
+        return status, operator_label
 
     def _record_history(self, best_f0_hz: Optional[int], score: float) -> None:
         self._best_f0_history.append(best_f0_hz)
@@ -601,6 +795,10 @@ class StationDetectorState:
             int(self.config.harmonic_smoothing_windows),
             int(self.config.min_alert_windows),
             int(self.config.min_drone_like_windows),
+            int(self.config.min_ml_candidate_windows),
+            int(self.config.min_ml_drone_like_windows),
+            5,
+            int(np.ceil(float(self.config.ml_strong_recent_window_sec))),
         )
         del values[:-max_items]
 
@@ -657,6 +855,10 @@ class StationDetectorState:
         hf_positive: bool = False,
         decision_reason: str = "no acoustic evidence",
         operator_label: str = "background",
+        candidate_run: int = 0,
+        ml_positive_run: int = 0,
+        strong_run: int = 0,
+        estimated_detection_delay_sec: Optional[float] = None,
         raw_best_f0_hz: Optional[int] = None,
         canonical_best_f0_hz: Optional[int] = None,
         f0_family_stable: bool = False,
@@ -693,6 +895,12 @@ class StationDetectorState:
             hf_positive=bool(hf_positive),
             decision_reason=str(decision_reason),
             operator_label=str(operator_label),
+            candidate_run=int(candidate_run),
+            ml_positive_run=int(ml_positive_run),
+            strong_run=int(strong_run),
+            estimated_detection_delay_sec=None
+            if estimated_detection_delay_sec is None
+            else float(max(0.0, estimated_detection_delay_sec)),
             raw_best_f0_hz=raw_best_f0_hz if raw_best_f0_hz is not None else best_f0_hz,
             canonical_best_f0_hz=canonical_best_f0_hz if canonical_best_f0_hz is not None else best_f0_hz,
             f0_family_stable=bool(f0_family_stable),

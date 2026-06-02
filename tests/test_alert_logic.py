@@ -20,6 +20,9 @@ def _event(
     ml_drone_pct: float | None = None,
     combined_drone_evidence_pct: float | None = None,
     operator_label: str | None = None,
+    candidate_run: int | None = None,
+    ml_positive_run: int | None = None,
+    strong_run: int | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
     coverage_radius_m: float | None = None,
@@ -34,6 +37,9 @@ def _event(
         "combined_drone_evidence_pct": combined_drone_evidence_pct,
         "f0_stable": f0_stable,
         "operator_label": operator_label,
+        "candidate_run": candidate_run,
+        "ml_positive_run": ml_positive_run,
+        "strong_run": strong_run,
     }
     if coverage_radius_m is not None:
         metadata["coverage_radius_m"] = coverage_radius_m
@@ -55,6 +61,9 @@ def _event(
         combined_drone_evidence_pct=combined_drone_evidence_pct,
         hf_p_drone=hf_p_drone,
         operator_label=operator_label,
+        candidate_run=candidate_run,
+        ml_positive_run=ml_positive_run,
+        strong_run=strong_run,
         calibrated=True,
         channel_agreement_count=channel_agreement_count,
         channel_count=1,
@@ -352,6 +361,76 @@ def test_ml_only_without_harmonic_support_stays_level_1_max():
     alert = alert_level_from_recent_events(events)
 
     assert alert.level <= 1
+
+
+def test_single_window_candidate_contributes_weakly_below_level_1():
+    alert = alert_level_from_recent_events(
+        [
+            _event(
+                "station_1",
+                status="suspect",
+                confidence=0.2,
+                harmonic_score=0.0,
+                harmonic_evidence_pct=0.0,
+                hf_p_drone=0.99,
+                ml_drone_pct=0.99,
+                best_f0_hz=None,
+                operator_label="ml_drone_candidate",
+                candidate_run=1,
+                ml_positive_run=1,
+            )
+        ]
+    )
+
+    assert alert.level == 0
+    assert "single_window_candidates=1" in alert.reason
+
+
+def test_candidate_run_two_is_level_1_local_candidate():
+    alert = alert_level_from_recent_events(
+        [
+            _event(
+                "station_1",
+                status="suspect",
+                confidence=0.2,
+                harmonic_score=0.0,
+                harmonic_evidence_pct=0.0,
+                hf_p_drone=0.99,
+                ml_drone_pct=0.99,
+                best_f0_hz=None,
+                operator_label="local_drone_candidate",
+                candidate_run=2,
+                ml_positive_run=2,
+            )
+        ]
+    )
+
+    assert alert.level == 1
+    assert "local_candidates=1" in alert.reason
+
+
+def test_candidate_run_three_counts_as_strong_candidate():
+    alert = alert_level_from_recent_events(
+        [
+            _event(
+                "station_1",
+                status="suspect",
+                confidence=0.2,
+                harmonic_score=0.0,
+                harmonic_evidence_pct=0.0,
+                hf_p_drone=0.99,
+                ml_drone_pct=0.99,
+                best_f0_hz=None,
+                operator_label="strong_local_candidate",
+                candidate_run=3,
+                ml_positive_run=3,
+                strong_run=3,
+            )
+        ]
+    )
+
+    assert alert.level == 1
+    assert "strong_candidates=1" in alert.reason
 
 
 def test_three_ml_strong_weak_harmonic_stations_are_level_2_not_level_3():

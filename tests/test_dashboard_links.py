@@ -88,6 +88,14 @@ def test_decision_display_uses_operator_label_for_ml_candidate():
     assert state["label"] == "ML DRONE CANDIDATE"
 
 
+def test_decision_display_uses_local_candidate_labels():
+    local = decision_display_state({"operator_label": "local_drone_candidate"})
+    strong = decision_display_state({"operator_label": "strong_local_candidate"})
+
+    assert local["label"] == "LOCAL DRONE CANDIDATE"
+    assert strong["label"] == "STRONG LOCAL CANDIDATE"
+
+
 def test_decision_scores_include_combined_evidence():
     scores = decision_score_values(
         {

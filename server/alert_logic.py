@@ -61,6 +61,16 @@ def _combined_pct(event: AcousticEvent) -> float:
     return float(max(0.0, min(1.0, (2.0 * ml * harmonic) / (ml + harmonic + 1e-6))))
 
 
+def _int_metric(event: AcousticEvent, key: str) -> int:
+    metadata = event.metadata or {}
+    value = getattr(event, key, None)
+    if value is None:
+        value = metadata.get(key)
+    if value is None:
+        return 0
+    return int(value)
+
+
 def _is_near_threshold_background(event: AcousticEvent, suspect_threshold: float) -> bool:
     hf = _ml_pct(event)
     harmonic = float(event.harmonic_score or 0.0)
@@ -85,7 +95,9 @@ def _strong_multichannel_evidence(event: AcousticEvent) -> bool:
 def station_evidence_score(event: AcousticEvent) -> float:
     status = _event_status(event)
     suspect_threshold, alert_threshold = _thresholds(event)
-    if status in BACKGROUND_STATUSES and not _is_near_threshold_background(event, suspect_threshold):
+    candidate_run = _int_metric(event, "candidate_run")
+    strong_run = _int_metric(event, "strong_run")
+    if status in BACKGROUND_STATUSES and candidate_run <= 0 and not _is_near_threshold_background(event, suspect_threshold):
         return 0.0
 
     harmonic_norm = _harmonic_norm(event, suspect_threshold, alert_threshold)
@@ -99,6 +111,12 @@ def station_evidence_score(event: AcousticEvent) -> float:
         score = max(score, 0.55)
     elif hf >= 0.90 and harmonic_norm <= 0.01:
         score = min(score, 0.59)
+    if candidate_run >= 3 or strong_run >= 3:
+        score = max(score, 0.75)
+    elif candidate_run >= 2:
+        score = max(score, 0.60)
+    elif candidate_run == 1 and hf >= 0.90:
+        score = min(score, 0.55)
 
     if status == "suspect":
         score += 0.15
@@ -114,6 +132,8 @@ def station_evidence_score(event: AcousticEvent) -> float:
         score += 0.10
     if _hf_negative(event) and not _strong_multichannel_evidence(event):
         score *= 0.40
+    if candidate_run == 1 and hf >= 0.90 and status != "alert":
+        score = min(score, 0.59)
 
     return float(max(0.0, min(1.0, score)))
 
@@ -232,6 +252,13 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     combined_mid_count = sum(1 for event in confirming_events if _combined_pct(event) >= 0.45)
     combined_strong_count = sum(1 for event in confirming_events if _combined_pct(event) >= 0.60)
     combined_high_count = sum(1 for event in confirming_events if _combined_pct(event) >= 0.75)
+    local_candidate_count = sum(1 for event in confirming_events if _int_metric(event, "candidate_run") >= 2)
+    strong_candidate_count = sum(
+        1
+        for event in confirming_events
+        if _int_metric(event, "candidate_run") >= 3 or _int_metric(event, "strong_run") >= 3
+    )
+    single_candidate_count = sum(1 for event in confirming_events if _int_metric(event, "candidate_run") == 1)
     ml_partial_count = sum(
         1
         for event in confirming_events
@@ -250,11 +277,12 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
         total_score >= 1.2
         or weak_station_count >= 2
         or combined_mid_count >= 2
+        or strong_candidate_count >= 2
         or ml_partial_count >= 2
         or local_alert_count >= 1
     ):
         level = 2
-    elif total_score >= 0.6 or combined_strong_count >= 1:
+    elif total_score >= 0.6 or combined_strong_count >= 1 or local_candidate_count >= 1 or strong_candidate_count >= 1:
         level = 1
     else:
         level = 0
@@ -285,6 +313,8 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
         f"same_source_f0={'yes' if same_source_f0 else 'no'}, "
         f"spatial_overlap={'unknown' if spatial_overlap is None else ('yes' if spatial_overlap else 'no')}, "
         f"shared_simulated_source={'yes' if shared_scenario_source else 'no'}, "
+        f"local_candidates={local_candidate_count}, strong_candidates={strong_candidate_count}, "
+        f"single_window_candidates={single_candidate_count}, "
         f"combined_high={combined_high_count}, local_alerts={local_alert_count}, "
         f"hf_negative_count={hf_negative_count}, total_score={total_score:.2f}"
     )

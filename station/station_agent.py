@@ -53,6 +53,10 @@ def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | No
         drone_like_exit_pct=float(stability_cfg.get("drone_like_exit_pct", 0.25)),
         min_alert_windows=int(stability_cfg.get("min_alert_windows", 2)),
         min_drone_like_windows=int(stability_cfg.get("min_drone_like_windows", 2)),
+        min_ml_candidate_windows=int(hf_cfg.get("min_ml_candidate_windows", 2)),
+        min_ml_drone_like_windows=int(hf_cfg.get("min_ml_drone_like_windows", 3)),
+        ml_spike_single_window_caps_to_candidate=bool(hf_cfg.get("ml_spike_single_window_caps_to_candidate", True)),
+        ml_strong_recent_window_sec=float(hf_cfg.get("ml_strong_recent_window_sec", 3.0)),
         f0_family_tolerance_hz=float(stability_cfg.get("f0_family_tolerance_hz", 140.0)),
     )
 
@@ -125,7 +129,7 @@ def main():
         device_id=audio_cfg.get("device_id"),
         sample_rate=int(audio_cfg["sample_rate"]),
         channels=int(audio_cfg["channels"]),
-        window_sec=float(audio_cfg["window_sec"]),
+        window_sec=float(audio_cfg.get("window_sec", 1.0)),
     ):
         now = time.time()
         sample_rate = int(audio_cfg["sample_rate"])
@@ -190,6 +194,10 @@ def main():
             hf_positive=frame.hf_positive,
             decision_reason=frame.decision_reason,
             operator_label=frame.operator_label,
+            candidate_run=frame.candidate_run,
+            ml_positive_run=frame.ml_positive_run,
+            strong_run=frame.strong_run,
+            estimated_detection_delay_sec=frame.estimated_detection_delay_sec,
             estimated_azimuth_deg=azimuth,
             direction_confidence=direction_confidence,
             rms=frame.rms,
@@ -225,6 +233,10 @@ def main():
                 "hf_positive": frame.hf_positive,
                 "decision_reason": frame.decision_reason,
                 "operator_label": frame.operator_label,
+                "candidate_run": frame.candidate_run,
+                "ml_positive_run": frame.ml_positive_run,
+                "strong_run": frame.strong_run,
+                "estimated_detection_delay_sec": frame.estimated_detection_delay_sec,
                 "hf_label": last_hf_result.label if last_hf_result is not None else None,
                 "hf_class_probs": last_hf_result.class_probs if last_hf_result is not None else {},
                 "hf_error": last_hf_result.error if last_hf_result is not None else None,
@@ -244,6 +256,7 @@ def main():
             f"f0={event.best_f0_hz} stable={frame.f0_stable} "
             f"hf={hf_display} label={hf_label} hf_err={hf_error} "
             f"rms={event.rms:.4f} dur={event.duration_sec:.1f} "
+            f"cand={frame.candidate_run} mlrun={frame.ml_positive_run} strong={frame.strong_run} "
             f"agree={event.channel_agreement_count}/{event.channel_count} "
             f"az={event.estimated_azimuth_deg}"
         )

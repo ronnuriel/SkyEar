@@ -47,6 +47,10 @@ class AcousticEvent(BaseModel):
     hf_positive: Optional[bool] = None
     decision_reason: Optional[str] = None
     operator_label: Optional[str] = None
+    candidate_run: Optional[int] = Field(default=None, ge=0)
+    ml_positive_run: Optional[int] = Field(default=None, ge=0)
+    strong_run: Optional[int] = Field(default=None, ge=0)
+    estimated_detection_delay_sec: Optional[float] = Field(default=None, ge=0.0)
     estimated_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
     direction_confidence: Optional[float] = None
     rms: Optional[float] = None
