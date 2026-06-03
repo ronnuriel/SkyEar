@@ -99,8 +99,8 @@ def build_events(timestamp: float | None = None) -> list[AcousticEvent]:
     return [
         build_simulated_event(
             "sim_001",
-            latitude=32.00000,
-            longitude=34.00000,
+            latitude=32.10350,
+            longitude=34.80800,
             source_id=NEAR_SOURCE_ID,
             coverage_radius_m=250.0,
             bearing_deg=35.0,
@@ -108,8 +108,8 @@ def build_events(timestamp: float | None = None) -> list[AcousticEvent]:
         ),
         build_simulated_event(
             "sim_002",
-            latitude=32.00045,
-            longitude=34.00045,
+            latitude=32.10420,
+            longitude=34.80920,
             source_id=NEAR_SOURCE_ID,
             coverage_radius_m=250.0,
             bearing_deg=305.0,
@@ -117,8 +117,8 @@ def build_events(timestamp: float | None = None) -> list[AcousticEvent]:
         ),
         build_simulated_event(
             "sim_003",
-            latitude=32.06000,
-            longitude=34.06000,
+            latitude=32.17400,
+            longitude=34.90200,
             source_id=FAR_SOURCE_ID,
             coverage_radius_m=150.0,
             bearing_deg=120.0,

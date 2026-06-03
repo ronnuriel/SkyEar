@@ -1,77 +1,26 @@
 # SkyEar
 
-SkyEar is a passive acoustic monitoring system for drone-like rotor evidence. A station listens locally, runs signal processing and optional ML/Hugging Face inference, writes a local live monitor snapshot, and can send compact JSON events to a central server for multi-station fusion.
+SkyEar is a passive acoustic monitoring system for Field Alpha drone-audio testing.
+
+A station listens locally, extracts acoustic evidence, optionally runs a Hugging Face audio classifier, and sends compact JSON events to a central server. The server fuses recent station evidence into tracks. The dashboard shows station health, local decisions, tracks, fusion level, and passive map cues.
+
+SkyEar does not send raw audio to the server. Local raw recording is optional and stays on the station computer.
 
 ## Safety Scope
 
-SkyEar is passive detection and operator warning only.
+SkyEar is passive warning and engineering evaluation only.
 
 - No jamming
 - No interception
-- No blinding
 - No targeting
 - No laser control
-- No weapon or active countermeasure integration
+- No weapon or countermeasure integration
 - PTZ/gimbal support is camera-only visual confirmation
+- Field Alpha is an engineering dry-run, not operational deployment
 
-## How The Pipeline Works
+## Quick Start: Field Alpha
 
-1. `skyear-station` captures audio from one station microphone or mic array.
-2. The station computes harmonic rotor evidence, f0 stability, RMS/peak, optional beam/bearing, and optional HF/ML drone probability.
-3. The station writes a local latest snapshot JSON and compact JSONL history under `runtime/stations/`.
-4. The local monitor reads that JSON directly, so it keeps working even if the central server is down.
-5. If a server URL is configured, the station posts an `AcousticEvent` JSON to `/events`.
-6. The central server stores latest station events and heartbeats, clusters station evidence into tracks, and exposes `/fusion`.
-7. The operator dashboard shows station health, local decisions, tracks, fusion level, bearing cues, and recommended operator action.
-
-Raw audio is not sent to the server. Optional raw recording writes local WAV snippets around local candidates only when enabled.
-
-## Install From GitHub
-
-Install the base station/server/dashboard tools:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install "skyear @ git+https://github.com/ronnuriel/SkyEar.git@main"
-```
-
-Install with Hugging Face and dataset tools:
-
-```bash
-pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@main"
-```
-
-Copy example configs into the current directory:
-
-```bash
-skyear-copy-configs configs
-```
-
-You can also copy them to a temporary or deployment directory:
-
-```bash
-skyear-copy-configs /tmp/skyear_configs
-```
-
-Console commands such as `skyear-station` and `skyear-server` are available inside the active virtual environment unless you installed SkyEar system-wide. After reconnecting over SSH, activate the venv again:
-
-```bash
-source /tmp/skyear_git_install_test/bin/activate
-```
-
-When copying command blocks into `zsh`, paste only the command lines. If interactive comments are disabled, shell comment lines that start with `#` can be treated as commands instead of comments.
-
-## Install From A Field Alpha Release
-
-After the `v0.1.0-field-alpha` tag is pushed, GitHub Actions builds the release package and attaches:
-
-- `skyear-0.1.0-py3-none-any.whl`
-- `skyear-0.1.0.tar.gz`
-
-You can see them in GitHub under `Releases` -> `v0.1.0-field-alpha`. They are not committed to the repository because `dist/` is intentionally ignored.
-
-Install directly from the Git tag:
+Install from the Field Alpha tag:
 
 ```bash
 python3 -m venv .venv
@@ -79,15 +28,113 @@ source .venv/bin/activate
 pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@v0.1.0-field-alpha"
 ```
 
-Or download the wheel from the GitHub Release and install that file:
+Copy configs and check audio devices:
+
+```bash
+skyear-copy-configs configs
+skyear-station --list-devices
+```
+
+Run the system in three terminals:
+
+```bash
+skyear-server --host 0.0.0.0 --port 8080
+```
+
+```bash
+skyear-station --config configs/config_station.yaml
+```
+
+```bash
+skyear-dashboard
+```
+
+Open the dashboard:
+
+```text
+http://localhost:8501
+```
+
+Optional, on the station computer, run the local monitor:
+
+```bash
+skyear-local-monitor -- --state runtime/stations/station_001_latest.json --history runtime/stations/station_001_history.jsonl
+```
+
+That is the Field Alpha operator flow:
+
+```text
+server -> station -> dashboard
+optional: local monitor
+```
+
+The separate spectrum app is not part of the operator flow.
+
+## What You Should See
+
+The dashboard should show:
+
+- Station health: online, stale, or offline
+- Local station status and operator label
+- HF/ML drone probability, harmonic evidence, and combined evidence
+- Fusion level: `LEVEL 0` to `LEVEL 3`
+- Active tracks, with stations grouped by likely shared source
+- Passive map cues and bearing sectors when station coordinates/bearings exist
+- Operator action text such as observe, take cover, or all clear
+
+The local monitor should show:
+
+- Waveform preview
+- Spectrum and harmonic lines
+- Spectrogram
+- RMS/peak/clipping warnings
+- HF label and error state
+- Harmonic, ML, and combined evidence bars
+- Persistence counters
+- f0 and bearing/beam fields when available
+
+## How The Pipeline Works
+
+1. `skyear-station` captures audio from one microphone or a synchronized mic array.
+2. The station computes harmonic rotor evidence, f0 stability, RMS/peak, optional beamforming, and optional HF/ML probability.
+3. The station writes local JSON snapshots under `runtime/stations/`.
+4. The local monitor reads those files directly, so it still works if the server is down.
+5. The station posts compact `AcousticEvent` JSON to `/events`.
+6. The server stores latest station events and heartbeats.
+7. Track fusion groups nearby or matching station detections into active tracks.
+8. The dashboard reads `/fusion`, `/stations/*`, `/alerts`, and map endpoints.
+
+HF/ML is advisory. It can support a candidate when acoustic evidence exists, but ML alone must not trigger a public warning.
+
+## Install Options
+
+Install the latest main branch:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install ./skyear-0.1.0-py3-none-any.whl
+pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@main"
 ```
 
-If you build locally, the package files are written only to local `dist/`:
+Install from a local checkout for development:
+
+```bash
+git clone https://github.com/ronnuriel/SkyEar.git
+cd SkyEar
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[all,dev]"
+```
+
+After reconnecting over SSH, activate the venv again:
+
+```bash
+source .venv/bin/activate
+```
+
+Console commands such as `skyear-server`, `skyear-station`, and `skyear-dashboard` exist only inside the active venv unless SkyEar was installed system-wide.
+
+If you build locally:
 
 ```bash
 python -m pip install build
@@ -96,135 +143,17 @@ ls dist/
 pip install dist/skyear-0.1.0-py3-none-any.whl
 ```
 
-## Install From A Local Checkout
+Release wheels and source archives are attached to GitHub Releases. They are not committed to the repository because `dist/` is ignored.
 
-```bash
-git clone https://github.com/ronnuriel/SkyEar.git
-cd SkyEar
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
+## Configure One Station
 
-For HF/dataset evaluation:
-
-```bash
-pip install -e ".[all,dev]"
-```
-
-Legacy requirements files are also kept:
-
-```bash
-pip install -r requirements.txt
-pip install -r requirements_hf.txt
-```
-
-## Quick Start
-
-Terminal 1, central server:
-
-```bash
-skyear-server --host 0.0.0.0 --port 8080
-```
-
-Terminal 2, one live station:
-
-```bash
-skyear-station --config configs/config_station.yaml
-```
-
-Terminal 3, central operator dashboard:
-
-```bash
-skyear-dashboard
-```
-
-Optional, on the station computer only, local per-station monitor:
-
-```bash
-skyear-local-monitor -- --state runtime/stations/station_001_latest.json --history runtime/stations/station_001_history.jsonl
-```
-
-If you are running from a source checkout, the helper script reads the monitor paths from the config:
-
-```bash
-scripts/run_station_monitor.sh configs/config_station.yaml
-```
-
-If running from source without installing console scripts, prefix the old commands with `PYTHONPATH=.`:
-
-```bash
-PYTHONPATH=. uvicorn server.api:app --host 0.0.0.0 --port 8080
-PYTHONPATH=. python -m station.station_agent --config configs/config_station.yaml
-PYTHONPATH=. streamlit run dashboard/app.py
-```
-
-## Quick Start: Field Alpha
-
-Install the Field Alpha tag:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@v0.1.0-field-alpha"
-```
-
-Copy configs:
+Start by copying configs:
 
 ```bash
 skyear-copy-configs configs
 ```
 
-Check microphones:
-
-```bash
-skyear-station --list-devices
-```
-
-Start the central server:
-
-```bash
-skyear-server --host 0.0.0.0 --port 8080
-```
-
-Start one station:
-
-```bash
-skyear-station --config configs/config_station.yaml
-```
-
-Start the central dashboard:
-
-```bash
-skyear-dashboard
-```
-
-Optional, on the station computer only, start the local station monitor:
-
-```bash
-skyear-local-monitor -- --state runtime/stations/station_001_latest.json --history runtime/stations/station_001_history.jsonl
-```
-
-Run a Svanström benchmark after the dataset is present under `data/datasets/`:
-
-```bash
-skyear-run-benchmarks \
-  --dataset svanstrom \
-  --window-sec 1.0 \
-  --output-dir reports/svanstrom_field_alpha
-```
-
-For the full release checklist, see [docs/RELEASE_FIELD_ALPHA.md](docs/RELEASE_FIELD_ALPHA.md).
-
-## Station Setup
-
-List audio devices:
-
-```bash
-skyear-station --list-devices
-```
-
-Edit the station config:
+Edit `configs/config_station.yaml`:
 
 ```yaml
 station:
@@ -248,21 +177,35 @@ local_monitor:
   history_path: runtime/stations/station_001_history.jsonl
 ```
 
-Start it:
+List devices:
+
+```bash
+skyear-station --list-devices
+```
+
+Run the station:
 
 ```bash
 skyear-station --config configs/config_station.yaml
 ```
 
-## Add A New Station
+For an 8-channel array, start from:
 
-1. Copy a config:
+```text
+configs/config_station_array_8ch.yaml
+```
+
+That config includes explicit `mic_positions_m`, beamforming settings, HF cadence, and local raw recording settings.
+
+## Add Another Station
+
+Copy a config:
 
 ```bash
 cp configs/config_station.yaml configs/config_station_roof.yaml
 ```
 
-2. Change:
+Change:
 
 - `station.station_id`
 - `station.name`
@@ -271,47 +214,40 @@ cp configs/config_station.yaml configs/config_station_roof.yaml
 - `local_monitor.state_path`
 - `local_monitor.history_path`
 
-3. Start the station:
+Run it:
 
 ```bash
 skyear-station --config configs/config_station_roof.yaml
 ```
 
-4. Start its local monitor:
+Run its local monitor:
 
 ```bash
 skyear-local-monitor -- --state runtime/stations/station_roof_latest.json --history runtime/stations/station_roof_history.jsonl
 ```
 
-In a source checkout you can also use:
+From a source checkout, this helper reads monitor paths from the config:
 
 ```bash
 scripts/run_station_monitor.sh configs/config_station_roof.yaml
 ```
 
-For an 8-channel synchronized array, start from:
+## Running A Station On Another Computer
 
-```bash
-configs/config_station_array_8ch.yaml
-```
-
-That config includes `mic_positions_m`, beamforming, HF cadence, and local raw recording settings.
-
-## Running Station On Another Computer
-
-Run the central server on one computer:
+On the server computer:
 
 ```bash
 skyear-server --host 0.0.0.0 --port 8080
 ```
 
-Find that computer's LAN/VPN IP, then on the station computer copy the remote template:
+On the station computer:
 
 ```bash
+skyear-copy-configs configs
 cp configs/config_station_remote.yaml configs/my_remote_station.yaml
 ```
 
-Edit:
+Edit the remote config:
 
 ```yaml
 station:
@@ -328,7 +264,7 @@ local_monitor:
   enabled: true
 ```
 
-Check connectivity from the station computer:
+Check connectivity:
 
 ```bash
 skyear-check-server --url http://SERVER_IP:8080
@@ -340,51 +276,11 @@ Start the station:
 skyear-station --config configs/my_remote_station.yaml
 ```
 
-If the central server is unreachable, the station prints a warning and still continues local monitor mode. For same-LAN, VPN, temporary tunnel, and reverse proxy deployments, see [docs/NETWORKING.md](docs/NETWORKING.md).
+If the server is unreachable, the station prints a warning and continues local monitor mode. For LAN, Tailscale/WireGuard, ngrok/cloudflared, and reverse proxy setups, see [docs/NETWORKING.md](docs/NETWORKING.md).
 
-## Local Monitor
+## HF Advisory Model
 
-The station writes:
-
-- `runtime/stations/<station_id>_latest.json`
-- `runtime/stations/<station_id>_history.jsonl`
-
-The local monitor displays:
-
-- Waveform preview
-- Spectrum and harmonic lines
-- Spectrogram
-- HF drone probability and label
-- Harmonic evidence
-- Combined drone evidence
-- Persistence counters
-- f0, RMS, peak/clipping warning
-- Beam/bearing panel
-- Server send and heartbeat errors
-
-It does not require the central server. If `/events` is down, the local station monitor still updates from the JSON file.
-
-## Central Dashboard
-
-```bash
-skyear-dashboard
-```
-
-The central dashboard shows:
-
-- All latest stations
-- Station health and heartbeat age
-- Operator label and decision reason
-- Fusion level
-- Active tracks
-- Bearing cue rows
-- Operator action: `observe`, `take cover`, or `all clear`
-
-## Optional HF Advisory Model
-
-HF is advisory only. It can support a local candidate when acoustic evidence exists, but it must not trigger ALERT alone.
-
-Install:
+Install with HF support:
 
 ```bash
 pip install "skyear[hf] @ git+https://github.com/ronnuriel/SkyEar.git@main"
@@ -401,80 +297,76 @@ hf:
   fallback_drone_label_idx: 1
 ```
 
-Smoke test on live captured audio:
+Smoke test with live captured audio:
 
 ```bash
 skyear-station --config configs/config_station.yaml --hf-smoke-test
 ```
 
-Test on a WAV file:
+Test one WAV file:
 
 ```bash
 skyear-hf-test --wav some.wav
 ```
 
-## Demo And Dataset Evaluation
+If HF fails, station logs include the real exception message and continue without crashing.
 
-Simulated client demo:
+## Demo Without Hardware
+
+Run the server and dashboard first:
+
+```bash
+skyear-server --host 0.0.0.0 --port 8080
+skyear-dashboard
+```
+
+Post a spatial track scenario:
+
+```bash
+skyear-simulate-two-near-one-far \
+  --server http://127.0.0.1:8080/events \
+  --assert-tracks
+```
+
+If the console command is not installed in a source checkout, use:
+
+```bash
+PYTHONPATH=. python -m tools.simulate_two_near_one_far \
+  --server http://127.0.0.1:8080/events \
+  --assert-tracks
+```
+
+Run the client demo:
 
 ```bash
 PYTHONPATH=. python -m tools.simulate_client_demo \
   --server http://127.0.0.1:8080/events \
   --channels 8 \
+  --window-sec 1.0 \
   --realtime
 ```
 
-Stream local WAV/FLAC/MP3 dataset files:
+Expected demo behavior:
 
-```bash
-skyear-stream-local-dataset \
-  --root data/datasets/svanstrom_drone_detection \
-  --label-filter drone \
-  --distance-filter Distant \
-  --station-id svan_distant_drone \
-  --channels 1 \
-  --window-sec 1.0 \
-  --hf \
-  --realtime \
-  --server http://127.0.0.1:8080/events
-```
+- Background returns to `LEVEL 0`
+- Motorcycle-like false positive should not become a strong alert
+- Two-station drone becomes stronger than single-station drone
+- Far unrelated stations are shown as separate local candidates or tracks
 
-Build a manifest:
+## Dataset And Benchmark Tools
 
-```bash
-skyear-build-manifest \
-  --root data/datasets/svanstrom_drone_detection \
-  --output-csv reports/manifest.csv \
-  --output-jsonl reports/manifest.jsonl
-```
+Public datasets are useful for engineering benchmarks and model training candidates. They are not operational validation by themselves.
 
-Evaluate a saved station report:
+Raw datasets live under `data/datasets/` and are ignored by Git.
 
-```bash
-skyear-eval-manifest \
-  --manifest reports/manifest.csv \
-  --predictions reports/svanstrom_policy/drone.csv \
-  --output-json reports/eval_summary.json
-```
-
-## Dataset Hub And Offline Benchmarks
-
-Raw public datasets live under `data/datasets/` and are ignored by Git. Track only registry, manifests, reports, and code. Public datasets are useful for engineering benchmarks and training candidates, but they are not operational validation by themselves.
-
-List and validate registered sources:
+List and validate datasets:
 
 ```bash
 skyear-datasets list
 skyear-datasets validate
 ```
 
-Download or prepare a registered source:
-
-```bash
-skyear-download-datasets --dataset drone_audio_detection_samples_hf --metadata-only --max-examples 20
-```
-
-For a small DroneAudioSet Hugging Face smoke test, use an explicit config, split, and example limit:
+Small Hugging Face smoke download:
 
 ```bash
 skyear-download-datasets \
@@ -484,9 +376,9 @@ skyear-download-datasets \
   --max-examples 20
 ```
 
-SkyEar refuses to materialize a full Hugging Face dataset unless you pass `--force-large`. For very large sources, prefer `--metadata-only`, `--streaming-export`, or a small `--max-examples` split first.
+SkyEar refuses to materialize large HF datasets unless `--force-large` is passed. Prefer `--metadata-only`, `--streaming-export`, or `--max-examples` first.
 
-Canonical dataset IDs and useful aliases:
+Common dataset IDs and aliases:
 
 ```text
 droneaudioset_hf
@@ -498,59 +390,59 @@ bowony_github
 kaggle_yehiel_levi
 ```
 
-Build a registry-backed manifest:
+Build and evaluate a manifest:
 
 ```bash
 skyear-build-manifest \
   --registry data/dataset_registry.yaml \
-  --dataset drone_audio_detection_samples_hf \
+  --dataset svanstrom \
   --verify-audio \
-  --output data/manifests/all_sources_manifest.csv
-```
+  --output data/manifests/svanstrom_manifest.csv
 
-Run the station detector offline over a manifest:
-
-```bash
 skyear-stream-manifest \
-  --manifest data/manifests/all_sources_manifest.csv \
+  --manifest data/manifests/svanstrom_manifest.csv \
   --config configs/config_station.yaml \
   --mode offline \
   --window-sec 1.0 \
-  --save-report reports/manifest_eval.csv
-```
+  --save-report reports/svanstrom/eval.csv
 
-Evaluate one WAV:
-
-```bash
-skyear-eval-audio \
-  --wav path/to/file.wav \
-  --config configs/config_station.yaml \
-  --label unknown \
-  --save-report reports/single_wav.csv
-```
-
-Summarize benchmark output and build leakage-safe splits:
-
-```bash
 skyear-summarize-benchmark \
-  --report reports/manifest_eval.csv \
-  --output reports/benchmark_summary.json
+  --report reports/svanstrom/eval.csv \
+  --output reports/svanstrom/summary.json
+```
 
-skyear-build-training-splits \
-  --manifest data/manifests/all_sources_manifest.csv \
-  --output-dir data/manifests
+One-command benchmark runner:
+
+```bash
+skyear-run-benchmarks \
+  --dataset svanstrom \
+  --window-sec 1.0 \
+  --hf \
+  --output-dir reports/benchmark_run
 ```
 
 ## Field Test Sessions
 
-Use the field-session tools for engineering dry-runs and labeled data collection. Start with the full checklist in [docs/FIELD_TEST_PROTOCOL.md](docs/FIELD_TEST_PROTOCOL.md).
+Use field session tools to make real tests reproducible and useful for later evaluation.
+
+Read the protocol first:
+
+```text
+docs/FIELD_TEST_PROTOCOL.md
+```
+
+Start a session:
 
 ```bash
 skyear-start-field-session \
   --location "north test field" \
   --station-id station_001 \
   --drone-model DJI_Neo
+```
 
+Mark an event:
+
+```bash
 skyear-mark-field-event \
   --session field_sessions/<session_id> \
   --label drone \
@@ -558,28 +450,33 @@ skyear-mark-field-event \
   --drone-model DJI_Neo \
   --bearing-deg 0 \
   --note "hover 30 sec north"
+```
 
+Save a manual debug capture:
+
+```bash
 skyear-save-debug-capture \
   --seconds 30 \
   --label unknown \
   --note "manual capture"
+```
 
+Evaluate the session:
+
+```bash
 skyear-eval-field-session \
   --session field_sessions/<session_id> \
   --output-json field_sessions/<session_id>/reports/eval_summary.json
 ```
 
-New `notes.csv` files use `timestamp` and `bearing_deg`. Older notes with `timestamp_unix` or `ground_truth_bearing_deg` are still supported by the evaluator.
+New `notes.csv` files use `timestamp` and `bearing_deg`. Older notes with `timestamp_unix` or `ground_truth_bearing_deg` are still supported.
 
-## Map View / Passive Geo Cues
-
-The dashboard includes a passive map section for station locations, health, bearing sectors, and approximate multi-station acoustic estimates. These are estimated acoustic areas and bearing cues, not targeting-grade positions.
+## Map And Passive Geo Cues
 
 Set station coordinates in each station config:
 
 ```yaml
 station:
-  id: station_array_8ch_001
   station_id: station_array_8ch_001
   name: Field Array 8ch
   latitude: 32.0853
@@ -589,40 +486,19 @@ station:
   location_label: "north tripod"
 ```
 
-Run server, station, and dashboard:
+A single station can show a range-unknown bearing sector. An approximate candidate area requires at least two recent stations with valid passive bearings, or a simulated/known source used for testing.
+
+Map smoke test:
 
 ```bash
-skyear-server --host 0.0.0.0 --port 8080
-skyear-station --config configs/config_station_array_8ch.yaml
-skyear-dashboard
+bash scripts/map_smoke_test.sh
 ```
 
-A single station can only show a range-unknown bearing sector. An approximate candidate location point requires at least two recent stations with valid passive bearings, or an explicitly simulated/known position.
+## Security For Field Use
 
-Test the map without microphones:
+Local development can accept unauthenticated events. When exposing the server outside localhost, configure token or HMAC authentication.
 
-```bash
-skyear-simulate-geo-events \
-  --server http://127.0.0.1:8080/events \
-  --station-a-lat 31.9955 --station-a-lon 34.0000 --station-a-bearing 0 \
-  --station-b-lat 32.0000 --station-b-lon 34.0053 --station-b-bearing 270
-```
-
-## Developer / Debug Tools
-
-The Field Alpha operator flow does not require a second Streamlit spectrum app. Use only `skyear-server`, `skyear-station`, `skyear-dashboard`, and optionally `skyear-local-monitor`.
-
-For developer debugging from a source checkout, the old station spectrum app is still available:
-
-```bash
-PYTHONPATH=. streamlit run dashboard/station_spectrum_app.py --server.port 8502
-```
-
-This app is not part of the Field Alpha field-operator startup flow and is not installed as a console command.
-
-## Security
-
-By default, local development accepts unauthenticated station events. For field use, set one or both environment variables on the server:
+Server:
 
 ```bash
 export SKYEAR_API_TOKEN="change-me"
@@ -630,7 +506,7 @@ export SKYEAR_HMAC_SECRET="change-me-too"
 skyear-server --host 0.0.0.0 --port 8080
 ```
 
-Then configure stations:
+Station config:
 
 ```yaml
 server:
@@ -639,46 +515,51 @@ server:
   hmac_secret: change-me-too
 ```
 
-## Build A Release Package
+## Developer / Debug Tools
 
-Build a wheel and source distribution:
+The Field Alpha operator flow does not use the old spectrum app. Operators should run only:
+
+```text
+skyear-server
+skyear-station
+skyear-dashboard
+optional: skyear-local-monitor
+```
+
+For developer debugging from a source checkout, the old spectrum app is still available:
 
 ```bash
-python -m pip install --upgrade build
+PYTHONPATH=. streamlit run dashboard/station_spectrum_app.py --server.port 8502
+```
+
+It is not part of the Field Alpha startup flow and is not installed as a console command.
+
+## Release And Tests
+
+Field Alpha release checklist:
+
+```text
+docs/RELEASE_FIELD_ALPHA.md
+```
+
+Run the normal checks:
+
+```bash
+python -m compileall station server dashboard shared tools tests
+pytest -q
+bash -n scripts/release_field_alpha_check.sh scripts/run_dataset_benchmarks.sh scripts/release_smoke_test.sh
 python -m build
 ```
 
-Artifacts are written to `dist/`.
-
-Install the wheel locally:
+Full release preflight:
 
 ```bash
-pip install dist/skyear-0.1.0-py3-none-any.whl
-```
-
-Create a GitHub release:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Upload the files from `dist/` to the GitHub release, or install directly from GitHub:
-
-```bash
-pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@v0.1.0"
-```
-
-## Tests
-
-```bash
-PYTHONPATH=. pytest -q
-PYTHONPATH=. python -m compileall station server dashboard shared tools tests
+bash scripts/release_field_alpha_check.sh
 ```
 
 ## Alert Levels
 
 - `LEVEL 0`: background
-- `LEVEL 1`: local/single-station candidate, operator observe
+- `LEVEL 1`: local or single-station candidate, operator observe
 - `LEVEL 2`: network acoustic confirmation candidate or strong local candidate
-- `LEVEL 3`: stronger multi-station candidate; still requires operational validation before any public warning
+- `LEVEL 3`: stronger multi-station candidate; still requires human validation before any public warning
