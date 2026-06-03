@@ -1,16 +1,27 @@
 from __future__ import annotations
 import argparse, time
+import json
 from pathlib import Path
 from typing import Any
 import numpy as np
 import requests
 import yaml
 
+from shared.auth import auth_headers
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
 from station.audio_capture import audio_blocks, list_input_devices, to_mono
+from station.beamforming import BeamformingResult, estimate_bearing
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
 from station.hf_detector import DEFAULT_MODEL_ID, HFDetector
+from station.local_monitor import (
+    atomic_write_json,
+    build_local_monitor_snapshot,
+    history_row_from_event,
+    local_monitor_paths,
+    write_local_monitor_snapshot,
+)
+from station.raw_recorder import RawRingBufferRecorder
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
 DETECTOR_VERSION = "station-detector-state-v1"
@@ -74,8 +85,10 @@ def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | No
         f0_family_tolerance_hz=float(stability_cfg.get("f0_family_tolerance_hz", 140.0)),
     )
 
-def _station_mode(audio: np.ndarray, direction_allowed: bool) -> str:
+def _station_mode(audio: np.ndarray, direction_allowed: bool, beamforming_allowed: bool = False) -> str:
     channel_count = audio.shape[1] if audio.ndim == 2 else 1
+    if beamforming_allowed:
+        return "synchronized_array_beamforming"
     if direction_allowed:
         return "synchronized_array_direction"
     if channel_count > 1:
@@ -96,12 +109,90 @@ def _audio_device_label(audio_cfg: dict[str, Any]) -> str | None:
     return None
 
 
+def _mic_positions(mic_cfg: dict[str, Any]) -> np.ndarray | None:
+    positions = mic_cfg.get("mic_positions_m")
+    if not positions:
+        return None
+    array = np.asarray(positions, dtype=np.float64)
+    if array.ndim != 2 or array.shape[1] < 2:
+        return None
+    return array[:, :3] if array.shape[1] >= 3 else np.pad(array, ((0, 0), (0, 1)))
+
+
 def _build_hf_detector(hf_cfg: dict[str, Any]) -> HFDetector:
     return HFDetector(
         model_id=str(hf_cfg.get("model_id") or DEFAULT_MODEL_ID),
         fallback_drone_label_idx=int(hf_cfg.get("fallback_drone_label_idx", 1)),
         threshold=float(hf_cfg.get("threshold", 0.70)),
     )
+
+
+def _station_auth_headers(payload: dict[str, Any], server_cfg: dict[str, Any]) -> dict[str, str]:
+    return auth_headers(
+        payload,
+        api_token=server_cfg.get("api_token"),
+        hmac_secret=server_cfg.get("hmac_secret"),
+    )
+
+
+def _post_payload(url: str, payload: dict[str, Any], server_cfg: dict[str, Any], timeout: float) -> requests.Response:
+    headers = _station_auth_headers(payload, server_cfg)
+    if server_cfg.get("hmac_secret"):
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        headers["Content-Type"] = "application/json"
+        return requests.post(url, data=body, headers=headers, timeout=timeout)
+    return requests.post(url, json=payload, headers=headers, timeout=timeout)
+
+
+def _is_local_candidate(event: AcousticEvent) -> bool:
+    label = event.operator_label or (event.metadata or {}).get("operator_label")
+    return (
+        int(event.candidate_run or 0) >= 2
+        or str(label) in {"local_drone_candidate", "strong_local_candidate", "drone_like", "alert"}
+        or str(event.status.value if hasattr(event.status, "value") else event.status) in {"drone_like", "alert"}
+    )
+
+
+def _write_local_monitor(
+    *,
+    enabled: bool,
+    state_path: Path,
+    history_path: Path,
+    event: AcousticEvent,
+    mono: np.ndarray,
+    waveform_points: int,
+    spectrum: dict[str, Any],
+    spectrogram: dict[str, Any],
+    harmonic_lines: list[dict[str, Any]],
+    hf_result: Any,
+    server_state: dict[str, Any],
+    history_max_rows: int | None,
+    updated_unix: float,
+    append_history: bool = True,
+) -> None:
+    if not enabled:
+        return
+    snapshot = build_local_monitor_snapshot(
+        event=event,
+        mono=mono,
+        waveform_points=waveform_points,
+        spectrum=spectrum,
+        spectrogram=spectrogram,
+        harmonic_lines=harmonic_lines,
+        hf_result=hf_result,
+        server_state=server_state,
+        updated_unix=updated_unix,
+    )
+    if append_history:
+        write_local_monitor_snapshot(
+            state_path=state_path,
+            history_path=history_path,
+            snapshot=snapshot,
+            history_row=history_row_from_event(event),
+            history_max_rows=history_max_rows,
+        )
+        return
+    atomic_write_json(state_path, snapshot)
 
 
 def run_hf_smoke_test(cfg: dict[str, Any]) -> int:
@@ -149,6 +240,9 @@ def main():
     stability_cfg = cfg.get("stability", {})
     hf_cfg = cfg.get("hf", {})
     heartbeat_cfg = cfg.get("heartbeat", {})
+    raw_cfg = cfg.get("raw_recording", {})
+    beamforming_cfg = cfg.get("beamforming", {})
+    local_monitor_cfg = cfg.get("local_monitor", {})
     coverage_radius_m = station_cfg.get("coverage_radius_m")
 
     detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg))
@@ -162,13 +256,38 @@ def main():
     last_send = 0.0
     last_heartbeat = 0.0
     last_error = None
+    last_heartbeat_error = None
     heartbeat_enabled = bool(heartbeat_cfg.get("enabled", True))
     heartbeat_interval = float(heartbeat_cfg.get("interval_sec", 5.0))
     heartbeat_url = str(heartbeat_cfg.get("url") or heartbeat_url_from_events_url(server_cfg["url"]))
+    mic_positions = _mic_positions(mic_cfg)
+    beamforming_requested = bool(beamforming_cfg.get("enabled", False))
+    beamforming_allowed = (
+        beamforming_requested
+        and mic_cfg.get("sync_mode") == "synchronized"
+        and mic_positions is not None
+        and mic_positions.shape[0] == int(audio_cfg["channels"])
+    )
     direction_requested = bool(dir_cfg.get("enabled"))
-    direction_allowed = direction_requested and mic_cfg.get("sync_mode") == "synchronized"
-    if direction_requested and not direction_allowed:
+    direction_allowed = direction_requested and mic_cfg.get("sync_mode") == "synchronized" and not beamforming_allowed
+    if beamforming_requested and not beamforming_allowed:
+        print("Beamforming disabled: synchronized mic positions do not match the audio channel count.")
+    if direction_requested and not direction_allowed and not beamforming_allowed:
         print("Direction disabled: this microphone profile is not synchronized.")
+    raw_recorder = None
+    if bool(raw_cfg.get("enabled", False)):
+        raw_recorder = RawRingBufferRecorder(
+            directory=raw_cfg.get("directory", "recordings/station"),
+            sample_rate=int(audio_cfg["sample_rate"]),
+            channels=int(audio_cfg["channels"]),
+            buffer_seconds=float(raw_cfg.get("buffer_seconds", 20.0)),
+            cooldown_seconds=float(raw_cfg.get("cooldown_seconds", 5.0)),
+        )
+    local_monitor_enabled = bool(local_monitor_cfg.get("enabled", True))
+    local_state_path, local_history_path = local_monitor_paths(cfg, str(station_cfg["station_id"]))
+    local_waveform_points = int(local_monitor_cfg.get("waveform_points", 1200))
+    local_history_max_rows = local_monitor_cfg.get("history_max_rows")
+    local_history_max_rows = None if local_history_max_rows is None else int(local_history_max_rows)
 
     print("Starting station:", station_cfg["station_id"])
 
@@ -181,6 +300,8 @@ def main():
         now = time.time()
         sample_rate = int(audio_cfg["sample_rate"])
         mono = to_mono(audio)
+        if raw_recorder is not None:
+            raw_recorder.append(audio)
         if hf_detector is not None and window_index % hf_run_every == 0:
             last_hf_result = hf_detector.predict(mono, sample_rate)
         hf_p_drone = last_hf_result.p_drone if last_hf_result is not None else None
@@ -209,7 +330,21 @@ def main():
         )
 
         azimuth, direction_confidence = None, None
-        if direction_allowed and audio.ndim == 2 and audio.shape[1] >= 3:
+        beam = BeamformingResult()
+        if beamforming_allowed and audio.ndim == 2 and audio.shape[1] >= 2 and mic_positions is not None:
+            beam = estimate_bearing(
+                audio,
+                int(audio_cfg["sample_rate"]),
+                mic_positions,
+                method=str(beamforming_cfg.get("method", "delay_and_sum")),
+                scan_step_deg=int(beamforming_cfg.get("scan_step_deg", dir_cfg.get("scan_step_deg", 5))),
+                low_hz=int(beamforming_cfg.get("low_hz", det_cfg.get("f0_min", 500))),
+                high_hz=int(beamforming_cfg.get("high_hz", max_freq)),
+                bearing_stability_deg=float(beamforming_cfg.get("bearing_stability_deg", 15.0)),
+            )
+            azimuth = beam.bearing_deg
+            direction_confidence = beam.beam_score
+        elif direction_allowed and audio.ndim == 2 and audio.shape[1] >= 3:
             azimuth, direction_confidence = estimate_azimuth(
                 audio,
                 int(audio_cfg["sample_rate"]),
@@ -252,6 +387,11 @@ def main():
             estimated_detection_delay_sec=frame.estimated_detection_delay_sec,
             estimated_azimuth_deg=azimuth,
             direction_confidence=direction_confidence,
+            beamforming_method=beam.beamforming_method if beamforming_allowed else None,
+            beam_score=beam.beam_score,
+            beam_snr_gain_db=beam.beam_snr_gain_db,
+            bearing_stable=beam.bearing_stable if beamforming_allowed else None,
+            bearing_uncertainty_deg=beam.bearing_uncertainty_deg,
             rms=frame.rms,
             peak=frame.peak,
             duration_sec=frame.duration_sec,
@@ -261,13 +401,18 @@ def main():
             channel_count=frame.channel_count,
             channel_evidence=[item.__dict__ for item in frame.per_channel],
             detector_version=DETECTOR_VERSION,
-            station_mode=_station_mode(audio, direction_allowed),
+            station_mode=_station_mode(audio, direction_allowed, beamforming_allowed),
             metadata={
                 "sample_rate": audio_cfg["sample_rate"],
                 "channels": audio_cfg["channels"],
                 "coverage_radius_m": None if coverage_radius_m is None else float(coverage_radius_m),
                 "mic_profile": mic_cfg.get("profile"),
                 "mic_sync_mode": mic_cfg.get("sync_mode"),
+                "beamforming_method": beam.beamforming_method if beamforming_allowed else None,
+                "beam_score": beam.beam_score,
+                "beam_snr_gain_db": beam.beam_snr_gain_db,
+                "bearing_stable": beam.bearing_stable if beamforming_allowed else None,
+                "bearing_uncertainty_deg": beam.bearing_uncertainty_deg,
                 "suspect_threshold": frame.suspect_threshold,
                 "alert_threshold": frame.alert_threshold,
                 "f0_stable": frame.f0_stable,
@@ -312,17 +457,74 @@ def main():
             f"rms={event.rms:.4f} dur={event.duration_sec:.1f} "
             f"cand={frame.candidate_run} mlrun={frame.ml_positive_run} strong={frame.strong_run} "
             f"agree={event.channel_agreement_count}/{event.channel_count} "
-            f"az={event.estimated_azimuth_deg}{hf_mode_note}"
+            f"az={event.estimated_azimuth_deg} beam={event.beam_score}{hf_mode_note}"
         )
+        local_server_state = {
+            "events_url": server_cfg["url"],
+            "heartbeat_url": heartbeat_url,
+            "last_send_error": last_error,
+            "last_heartbeat_error": last_heartbeat_error,
+            "last_send_unix": last_send if last_send else None,
+            "last_heartbeat_unix": last_heartbeat if last_heartbeat else None,
+        }
+        try:
+            _write_local_monitor(
+                enabled=local_monitor_enabled,
+                state_path=local_state_path,
+                history_path=local_history_path,
+                event=event,
+                mono=mono,
+                waveform_points=local_waveform_points,
+                spectrum=spectrum,
+                spectrogram=spectrogram,
+                harmonic_lines=harmonic_lines,
+                hf_result=last_hf_result,
+                server_state=local_server_state,
+                history_max_rows=local_history_max_rows,
+                updated_unix=now,
+            )
+        except Exception as e:
+            print("[WARN] local monitor write failed:", e)
+        if raw_recorder is not None and _is_local_candidate(event):
+            saved = raw_recorder.save_candidate(
+                station_id=event.station_id,
+                metadata=event.model_dump(mode="json"),
+                now=now,
+            )
+            if saved is not None:
+                wav_path, json_path = saved
+                print(f"[RAW] saved candidate audio: {wav_path} sidecar={json_path}")
 
         if now - last_send >= float(server_cfg["send_interval_sec"]):
             try:
-                requests.post(server_cfg["url"], json=event.model_dump(mode="json"), timeout=1.5)
+                event_payload = event.model_dump(mode="json")
+                _post_payload(server_cfg["url"], event_payload, server_cfg, timeout=1.5)
                 last_error = None
             except Exception as e:
                 last_error = str(e)
                 print("[WARN] send failed:", e)
             last_send = now
+            local_server_state["last_send_error"] = last_error
+            local_server_state["last_send_unix"] = last_send
+            try:
+                _write_local_monitor(
+                    enabled=local_monitor_enabled,
+                    state_path=local_state_path,
+                    history_path=local_history_path,
+                    event=event,
+                    mono=mono,
+                    waveform_points=local_waveform_points,
+                    spectrum=spectrum,
+                    spectrogram=spectrogram,
+                    harmonic_lines=harmonic_lines,
+                    hf_result=last_hf_result,
+                    server_state=local_server_state,
+                history_max_rows=local_history_max_rows,
+                updated_unix=time.time(),
+                append_history=False,
+            )
+            except Exception as e:
+                print("[WARN] local monitor write failed:", e)
 
         if heartbeat_enabled and now - last_heartbeat >= heartbeat_interval:
             heartbeat = StationHeartbeat(
@@ -345,15 +547,41 @@ def main():
                 metadata={
                     "mic_profile": mic_cfg.get("profile"),
                     "mic_sync_mode": mic_cfg.get("sync_mode"),
+                    "beamforming_enabled": beamforming_allowed,
+                    "beamforming_method": beamforming_cfg.get("method") if beamforming_allowed else None,
                     "window_index": window_index,
                     "hf_error_message": hf_error_message,
                 },
             )
             try:
-                requests.post(heartbeat_url, json=heartbeat.model_dump(mode="json"), timeout=1.5)
+                heartbeat_payload = heartbeat.model_dump(mode="json")
+                _post_payload(heartbeat_url, heartbeat_payload, server_cfg, timeout=1.5)
+                last_heartbeat_error = None
             except Exception as e:
+                last_heartbeat_error = str(e)
                 print("[WARN] heartbeat failed:", e)
             last_heartbeat = now
+            local_server_state["last_heartbeat_error"] = last_heartbeat_error
+            local_server_state["last_heartbeat_unix"] = last_heartbeat
+            try:
+                _write_local_monitor(
+                    enabled=local_monitor_enabled,
+                    state_path=local_state_path,
+                    history_path=local_history_path,
+                    event=event,
+                    mono=mono,
+                    waveform_points=local_waveform_points,
+                    spectrum=spectrum,
+                    spectrogram=spectrogram,
+                    harmonic_lines=harmonic_lines,
+                    hf_result=last_hf_result,
+                    server_state=local_server_state,
+                    history_max_rows=local_history_max_rows,
+                    updated_unix=time.time(),
+                    append_history=False,
+                )
+            except Exception as e:
+                print("[WARN] local monitor write failed:", e)
 
 if __name__ == "__main__":
     main()

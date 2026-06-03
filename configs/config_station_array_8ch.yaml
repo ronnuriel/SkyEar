@@ -1,0 +1,96 @@
+station:
+  station_id: station_array_8ch_001
+  name: Field Array 8ch
+  latitude: 32.0853
+  longitude: 34.7818
+  altitude_m: 20.0
+  coverage_radius_m: 350.0
+
+audio:
+  device_id: null
+  sample_rate: 48000
+  channels: 8
+  window_sec: 1.0
+
+detector:
+  f0_min: 500
+  f0_max: 2200
+  max_freq: 7000
+  min_harmonics: 3
+  min_suspect_threshold: 16.0
+  min_alert_threshold: 22.0
+  calibration_seconds: 6.0
+  min_alert_duration_sec: 2.0
+  clear_after_sec: 3.0
+
+stability:
+  enabled: true
+  history_windows: 5
+  max_f0_std_hz: 180
+  min_score_windows: 3
+  smoothing_enabled: true
+  harmonic_smoothing_windows: 5
+
+hf:
+  enabled: true
+  run_every_n_windows: 1
+  threshold: 0.70
+  ml_strong_threshold: 0.90
+  min_ml_candidate_windows: 2
+  min_ml_drone_like_windows: 3
+
+mic_array:
+  profile: explicit_8ch_field_array
+  sync_mode: synchronized
+  channel_mode: array_8ch
+  mic_positions_m:
+    - [0.120, 0.000, 0.000]
+    - [0.085, 0.085, 0.000]
+    - [0.000, 0.120, 0.000]
+    - [-0.085, 0.085, 0.000]
+    - [-0.120, 0.000, 0.000]
+    - [-0.085, -0.085, 0.000]
+    - [0.000, -0.120, 0.000]
+    - [0.085, -0.085, 0.000]
+
+beamforming:
+  enabled: true
+  method: delay_and_sum
+  scan_step_deg: 5
+  low_hz: 500
+  high_hz: 7000
+  bearing_stability_deg: 15.0
+
+raw_recording:
+  enabled: true
+  directory: recordings/field_array_8ch
+  buffer_seconds: 20.0
+  cooldown_seconds: 5.0
+
+ptz:
+  enabled: false
+  adapter: mock
+  visual_confirmation_only: true
+
+direction:
+  enabled: true
+  array_radius_m: 0.12
+  scan_step_deg: 5
+
+server:
+  url: http://127.0.0.1:8080/events
+  send_interval_sec: 0.5
+  api_token: null
+  hmac_secret: null
+
+heartbeat:
+  enabled: true
+  interval_sec: 5.0
+
+local_monitor:
+  enabled: true
+  directory: runtime/stations
+  state_path: runtime/stations/station_array_8ch_001_latest.json
+  history_path: runtime/stations/station_array_8ch_001_history.jsonl
+  waveform_points: 1200
+  history_max_rows: 2000

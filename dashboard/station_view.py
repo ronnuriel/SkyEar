@@ -198,6 +198,22 @@ def format_operator_label(value: str) -> str:
     return OPERATOR_LABEL_TEXT.get(value, value.replace("_", " ").upper() if value else "BACKGROUND")
 
 
+def operator_action_label(fusion_level: int, event: dict | None = None) -> str:
+    event = event or {}
+    status = str(event.get("status") or "").lower()
+    label = operator_label(event)
+    if int(fusion_level or 0) >= 3 or status == "alert" or label == "alert":
+        return "take cover"
+    if int(fusion_level or 0) >= 1 or status in {"suspect", "drone_like"} or label in {
+        "ml_drone_candidate",
+        "local_drone_candidate",
+        "strong_local_candidate",
+        "drone_like",
+    }:
+        return "observe"
+    return "all clear"
+
+
 def decision_display_state(event: dict) -> dict[str, str]:
     harmonic, ml, combined = decision_scores(event)
     ml_value = ml if ml is not None else 0.0

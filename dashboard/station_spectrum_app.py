@@ -8,6 +8,7 @@ import streamlit as st
 from dashboard.station_view import (
     health_badge_label,
     is_event_stale_for_fusion,
+    operator_action_label,
     plot_spectrogram_figure,
     plot_spectrum_figure,
     render_decision_bars,
@@ -109,6 +110,12 @@ else:
     detail_cols[1].metric("RMS", f"{float(event.get('rms') or 0.0):.4f}")
     detail_cols[2].metric("Duration", f"{float(event.get('duration_sec') or 0.0):.1f}s")
     detail_cols[3].metric("Age", timing["event_age"])
+
+    bearing_cols = st.columns(4)
+    bearing_cols[0].metric("Operator action", operator_action_label(0, event).upper())
+    bearing_cols[1].metric("Bearing", event.get("estimated_azimuth_deg") if event.get("estimated_azimuth_deg") is not None else "n/a")
+    bearing_cols[2].metric("Beam score", f"{float(event.get('beam_score') or 0.0):.3f}" if event.get("beam_score") is not None else "n/a")
+    bearing_cols[3].metric("Bearing stable", "yes" if event.get("bearing_stable") else "no")
 
     if metadata.get("demo_phase"):
         st.info(f"Demo phase: {metadata['demo_phase']}")

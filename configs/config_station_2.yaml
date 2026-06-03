@@ -47,3 +47,11 @@ direction:
 server:
   url: http://127.0.0.1:8080/events
   send_interval_sec: 0.5
+
+local_monitor:
+  enabled: true
+  directory: runtime/stations
+  state_path: runtime/stations/station_002_latest.json
+  history_path: runtime/stations/station_002_history.jsonl
+  waveform_points: 1200
+  history_max_rows: 2000

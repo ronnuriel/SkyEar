@@ -1,5 +1,35 @@
 import pandas as pd
 import streamlit as st
+import math
+
+
+def bearing_ray_rows(events: list[dict], ray_length_m: float = 500.0) -> list[dict]:
+    rows = []
+    for event in events:
+        loc = event.get("station_location") or {}
+        bearing = event.get("estimated_azimuth_deg")
+        if bearing is None or loc.get("latitude") is None or loc.get("longitude") is None:
+            continue
+        lat = float(loc["latitude"])
+        lon = float(loc["longitude"])
+        bearing_rad = math.radians(float(bearing))
+        d_north = math.cos(bearing_rad) * float(ray_length_m)
+        d_east = math.sin(bearing_rad) * float(ray_length_m)
+        end_lat = lat + d_north / 111_320.0
+        end_lon = lon + d_east / (111_320.0 * max(0.1, math.cos(math.radians(lat))))
+        rows.append(
+            {
+                "station_id": event.get("station_id"),
+                "lat": lat,
+                "lon": lon,
+                "bearing_deg": float(bearing),
+                "ray_end_lat": end_lat,
+                "ray_end_lon": end_lon,
+                "beam_score": event.get("beam_score"),
+                "bearing_stable": event.get("bearing_stable"),
+            }
+        )
+    return rows
 
 def show_station_table(events: list[dict]):
     if not events:
