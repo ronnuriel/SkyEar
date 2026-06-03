@@ -1,9 +1,12 @@
 station:
+  id: remote_station_001
   station_id: remote_station_001
   name: Remote Station 001
   latitude: 32.0853
   longitude: 34.7818
   altitude_m: 20.0
+  heading_offset_deg: 0.0
+  location_label: ""
   coverage_radius_m: 250.0
 
 audio:

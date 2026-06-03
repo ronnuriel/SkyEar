@@ -1,13 +1,35 @@
-import pandas as pd
-import streamlit as st
+from __future__ import annotations
+
 import math
+from typing import Any
+
+import pandas as pd
+
+
+def normalize_map_state(payload: dict[str, Any] | None) -> dict[str, Any]:
+    payload = payload or {}
+    return {
+        "server_time": payload.get("server_time"),
+        "stations": payload.get("stations") or [],
+        "bearing_cues": payload.get("bearing_cues") or [],
+        "geo_estimates": payload.get("geo_estimates") or [],
+        "tracks": payload.get("tracks") or [],
+    }
+
+
+def stations_missing_location(map_state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        station
+        for station in normalize_map_state(map_state)["stations"]
+        if station.get("latitude") is None or station.get("longitude") is None
+    ]
 
 
 def bearing_ray_rows(events: list[dict], ray_length_m: float = 500.0) -> list[dict]:
     rows = []
     for event in events:
         loc = event.get("station_location") or {}
-        bearing = event.get("estimated_azimuth_deg")
+        bearing = event.get("estimated_azimuth_deg") or event.get("bearing_deg")
         if bearing is None or loc.get("latitude") is None or loc.get("longitude") is None:
             continue
         lat = float(loc["latitude"])
@@ -31,27 +53,130 @@ def bearing_ray_rows(events: list[dict], ray_length_m: float = 500.0) -> list[di
         )
     return rows
 
-def show_station_table(events: list[dict]):
-    if not events:
-        st.info("No events yet.")
-        return
+
+def station_marker_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
-    for e in events:
-        loc = e.get("station_location") or {}
-        rows.append({
-            "station_id": e.get("station_id"),
-            "status": e.get("status"),
-            "confidence": e.get("confidence"),
-            "harmonic_score": e.get("harmonic_score"),
-            "best_f0_hz": e.get("best_f0_hz"),
-            "rms": e.get("rms"),
-            "calibrated": e.get("calibrated"),
-            "channel_agreement_count": e.get("channel_agreement_count"),
-            "strongest_channel": e.get("strongest_channel"),
-            "channel_count": e.get("channel_count"),
-            "station_mode": e.get("station_mode"),
-            "azimuth": e.get("estimated_azimuth_deg"),
-            "lat": loc.get("latitude"),
-            "lon": loc.get("longitude"),
-        })
-    st.dataframe(pd.DataFrame(rows).tail(100).iloc[::-1], width="stretch")
+    for station in normalize_map_state(map_state)["stations"]:
+        if station.get("latitude") is None or station.get("longitude") is None:
+            continue
+        status = str(station.get("last_status") or "background")
+        health = str(station.get("health") or "offline")
+        rows.append(
+            {
+                **station,
+                "lat": float(station["latitude"]),
+                "lon": float(station["longitude"]),
+                "color": _station_color(status, health),
+            }
+        )
+    return rows
+
+
+def sector_polygon_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for cue in normalize_map_state(map_state)["bearing_cues"]:
+        polygon = cue.get("sector_polygon") or []
+        if len(polygon) >= 3:
+            rows.append(
+                {
+                    "station_id": cue.get("station_id"),
+                    "bearing_deg": cue.get("bearing_deg"),
+                    "uncertainty_deg": cue.get("uncertainty_deg"),
+                    "polygon": [[point["longitude"], point["latitude"]] for point in polygon],
+                }
+            )
+    return rows
+
+
+def estimate_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for estimate in normalize_map_state(map_state)["geo_estimates"]:
+        if estimate.get("latitude") is not None and estimate.get("longitude") is not None:
+            rows.append(
+                {
+                    **estimate,
+                    "lat": float(estimate["latitude"]),
+                    "lon": float(estimate["longitude"]),
+                }
+            )
+    return rows
+
+
+def _station_color(status: str, health: str) -> list[int]:
+    if health in {"offline", "stale"}:
+        return [130, 130, 130, 180]
+    if status in {"alert", "drone_like"}:
+        return [220, 40, 30, 220]
+    if status in {"suspect", "calibrating"}:
+        return [240, 190, 40, 220]
+    return [40, 170, 80, 220]
+
+
+def render_passive_map(st, map_state: dict[str, Any]) -> None:
+    st.subheader("Map / Passive Acoustic Situation")
+    st.caption("Map estimates are approximate acoustic cues and not targeting-grade.")
+    state = normalize_map_state(map_state)
+    missing = stations_missing_location(state)
+    if missing:
+        st.warning("Stations missing location")
+        st.dataframe(pd.DataFrame(missing), width="stretch")
+
+    markers = station_marker_rows(state)
+    sectors = sector_polygon_rows(state)
+    estimates = estimate_rows(state)
+    if not markers:
+        st.info("No station coordinates available for map rendering.")
+        return
+    try:
+        import pydeck as pdk
+    except Exception:
+        st.dataframe(pd.DataFrame(markers), width="stretch")
+        if sectors:
+            st.dataframe(pd.DataFrame(sectors), width="stretch")
+        if estimates:
+            st.dataframe(pd.DataFrame(estimates), width="stretch")
+        return
+
+    layers = [
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=markers,
+            get_position="[lon, lat]",
+            get_fill_color="color",
+            get_radius=35,
+            pickable=True,
+        )
+    ]
+    if sectors:
+        layers.append(
+            pdk.Layer(
+                "PolygonLayer",
+                data=sectors,
+                get_polygon="polygon",
+                get_fill_color=[255, 120, 20, 45],
+                get_line_color=[255, 80, 20, 160],
+                line_width_min_pixels=1,
+                pickable=True,
+            )
+        )
+    if estimates:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=estimates,
+                get_position="[lon, lat]",
+                get_fill_color=[220, 30, 30, 120],
+                get_radius="radius_m || 100",
+                pickable=True,
+            )
+        )
+    center = markers[0]
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=layers,
+            initial_view_state=pdk.ViewState(latitude=center["lat"], longitude=center["lon"], zoom=13),
+            tooltip={
+                "text": "{station_id}\n{health}\n{last_status}\nML {ml_drone_pct}\nCombined {combined_drone_evidence_pct}\nBearing {bearing_deg}"
+            },
+        )
+    )

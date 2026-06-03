@@ -462,6 +462,43 @@ skyear-eval-field-session \
 
 New `notes.csv` files use `timestamp` and `bearing_deg`. Older notes with `timestamp_unix` or `ground_truth_bearing_deg` are still supported by the evaluator.
 
+## Map View / Passive Geo Cues
+
+The dashboard includes a passive map section for station locations, health, bearing sectors, and approximate multi-station acoustic estimates. These are estimated acoustic areas and bearing cues, not targeting-grade positions.
+
+Set station coordinates in each station config:
+
+```yaml
+station:
+  id: station_array_8ch_001
+  station_id: station_array_8ch_001
+  name: Field Array 8ch
+  latitude: 32.0853
+  longitude: 34.7818
+  altitude_m: 20
+  heading_offset_deg: 0
+  location_label: "north tripod"
+```
+
+Run server, station, and dashboard:
+
+```bash
+skyear-server --host 0.0.0.0 --port 8080
+skyear-station --config configs/config_station_array_8ch.yaml
+skyear-dashboard
+```
+
+A single station can only show a range-unknown bearing sector. An approximate candidate location point requires at least two recent stations with valid passive bearings, or an explicitly simulated/known position.
+
+Test the map without microphones:
+
+```bash
+skyear-simulate-geo-events \
+  --server http://127.0.0.1:8080/events \
+  --station-a-lat 31.9955 --station-a-lon 34.0000 --station-a-bearing 0 \
+  --station-b-lat 32.0000 --station-b-lon 34.0053 --station-b-bearing 270
+```
+
 ## Security
 
 By default, local development accepts unauthenticated station events. For field use, set one or both environment variables on the server:

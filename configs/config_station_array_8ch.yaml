@@ -1,9 +1,12 @@
 station:
+  id: station_array_8ch_001
   station_id: station_array_8ch_001
   name: Field Array 8ch
   latitude: 32.0853
   longitude: 34.7818
   altitude_m: 20.0
+  heading_offset_deg: 0.0
+  location_label: "north tripod"
   coverage_radius_m: 350.0
 
 audio:

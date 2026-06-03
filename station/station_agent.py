@@ -181,6 +181,42 @@ def _audio_device_label(audio_cfg: dict[str, Any]) -> str | None:
     return None
 
 
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    return float(value)
+
+
+def _station_id(station_cfg: dict[str, Any]) -> str:
+    return str(station_cfg.get("station_id") or station_cfg.get("id") or "station_001")
+
+
+def _station_geo_fields(station_cfg: dict[str, Any]) -> dict[str, Any]:
+    latitude = _optional_float(station_cfg.get("latitude"))
+    longitude = _optional_float(station_cfg.get("longitude"))
+    altitude = _optional_float(station_cfg.get("altitude_m"))
+    heading_offset = float(station_cfg.get("heading_offset_deg") or 0.0)
+    location_label = str(station_cfg.get("location_label") or "")
+    return {
+        "station_latitude": latitude,
+        "station_longitude": longitude,
+        "station_altitude_m": altitude,
+        "station_heading_offset_deg": heading_offset,
+        "station_location_label": location_label,
+    }
+
+
+def _station_location(station_cfg: dict[str, Any]) -> GeoPoint | None:
+    fields = _station_geo_fields(station_cfg)
+    if fields["station_latitude"] is None or fields["station_longitude"] is None:
+        return None
+    return GeoPoint(
+        latitude=float(fields["station_latitude"]),
+        longitude=float(fields["station_longitude"]),
+        altitude_m=fields["station_altitude_m"],
+    )
+
+
 def _mic_positions(mic_cfg: dict[str, Any]) -> np.ndarray | None:
     positions = mic_cfg.get("mic_positions_m")
     if not positions:
@@ -314,6 +350,8 @@ def main():
         raise SystemExit(run_hf_smoke_test(cfg))
 
     station_cfg, audio_cfg = cfg["station"], cfg["audio"]
+    station_id = _station_id(station_cfg)
+    station_geo = _station_geo_fields(station_cfg)
     det_cfg, dir_cfg, server_cfg = cfg["detector"], cfg["direction"], cfg["server"]
     mic_cfg = cfg.get("mic_array", {})
     stability_cfg = cfg.get("stability", {})
@@ -363,7 +401,7 @@ def main():
             cooldown_seconds=float(raw_cfg.get("cooldown_seconds", 5.0)),
         )
     local_monitor_enabled = bool(local_monitor_cfg.get("enabled", True))
-    local_state_path, local_history_path = local_monitor_paths(cfg, str(station_cfg["station_id"]))
+    local_state_path, local_history_path = local_monitor_paths(cfg, station_id)
     local_waveform_points = int(local_monitor_cfg.get("waveform_points", 1200))
     local_history_max_rows = local_monitor_cfg.get("history_max_rows")
     local_history_max_rows = None if local_history_max_rows is None else int(local_history_max_rows)
@@ -375,7 +413,7 @@ def main():
         print("[WARN] server connectivity check failed:", server_check_reason)
         print("[WARN] continuing station in local monitor mode; central posting will keep retrying.")
 
-    print("Starting station:", station_cfg["station_id"])
+    print("Starting station:", station_id)
 
     for audio in audio_blocks(
         device_id=audio_cfg.get("device_id"),
@@ -438,16 +476,15 @@ def main():
                 radius_m=float(dir_cfg["array_radius_m"]),
                 step_deg=int(dir_cfg["scan_step_deg"]),
             )
+        if azimuth is not None:
+            azimuth = (float(azimuth) + float(station_geo["station_heading_offset_deg"] or 0.0)) % 360.0
 
         event = AcousticEvent(
-            station_id=station_cfg["station_id"],
+            station_id=station_id,
             station_name=station_cfg.get("name"),
             timestamp_unix=now,
-            station_location=GeoPoint(
-                latitude=float(station_cfg["latitude"]),
-                longitude=float(station_cfg["longitude"]),
-                altitude_m=float(station_cfg.get("altitude_m", 0.0)),
-            ),
+            station_location=_station_location(station_cfg),
+            **station_geo,
             status=EventStatus(frame.status),
             confidence=frame.confidence,
             harmonic_score=frame.harmonic_score,
@@ -495,6 +532,11 @@ def main():
             metadata={
                 "sample_rate": audio_cfg["sample_rate"],
                 "channels": audio_cfg["channels"],
+                "latitude": station_geo["station_latitude"],
+                "longitude": station_geo["station_longitude"],
+                "altitude_m": station_geo["station_altitude_m"],
+                "heading_offset_deg": station_geo["station_heading_offset_deg"],
+                "location_label": station_geo["station_location_label"],
                 "coverage_radius_m": None if coverage_radius_m is None else float(coverage_radius_m),
                 "mic_profile": mic_cfg.get("profile"),
                 "mic_sync_mode": mic_cfg.get("sync_mode"),
@@ -623,7 +665,7 @@ def main():
 
         if heartbeat_enabled and now - last_heartbeat >= heartbeat_interval:
             heartbeat = StationHeartbeat(
-                station_id=station_cfg["station_id"],
+                station_id=station_id,
                 station_name=station_cfg.get("name"),
                 timestamp_unix=now,
                 status="error" if (last_error or hf_error_message) else "online",
@@ -640,6 +682,11 @@ def main():
                 last_error=last_error or hf_error_message,
                 errors=[error for error in [last_error, hf_error_message] if error],
                 metadata={
+                    "latitude": station_geo["station_latitude"],
+                    "longitude": station_geo["station_longitude"],
+                    "altitude_m": station_geo["station_altitude_m"],
+                    "heading_offset_deg": station_geo["station_heading_offset_deg"],
+                    "location_label": station_geo["station_location_label"],
                     "mic_profile": mic_cfg.get("profile"),
                     "mic_sync_mode": mic_cfg.get("sync_mode"),
                     "beamforming_enabled": beamforming_allowed,

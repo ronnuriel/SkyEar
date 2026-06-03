@@ -28,6 +28,11 @@ class AcousticEvent(BaseModel):
     timestamp_unix: float
     server_received_unix: Optional[float] = None
     station_location: Optional[GeoPoint] = None
+    station_latitude: Optional[float] = None
+    station_longitude: Optional[float] = None
+    station_altitude_m: Optional[float] = None
+    station_heading_offset_deg: Optional[float] = None
+    station_location_label: Optional[str] = None
     status: EventStatus
     confidence: float = Field(ge=0.0, le=1.0)
     harmonic_score: float

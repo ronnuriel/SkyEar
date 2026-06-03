@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from dashboard.map_view import bearing_ray_rows
+from dashboard.map_view import bearing_ray_rows, render_passive_map
 from dashboard.station_view import (
     external_spectrum_app_url,
     health_badge_label,
@@ -191,6 +191,12 @@ try:
                 _draw_track_card(track)
 except Exception as e:
     st.error(f"Could not load fusion: {e}")
+
+try:
+    map_state = requests.get(f"{server_url}/map/state", timeout=2).json()
+    render_passive_map(st, map_state)
+except Exception as e:
+    st.info(f"Map / Passive Acoustic Situation unavailable: {e}")
 
 st.subheader("Stations")
 try:

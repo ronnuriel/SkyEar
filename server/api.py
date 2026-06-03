@@ -5,6 +5,7 @@ from shared.event_schema import AcousticEvent, FusedAlert, StationHeartbeat
 from server.auth import require_station_auth
 from server.database import db
 from server.fusion import fuse_events
+from server.geo_fusion import map_state_from_db
 from server.ptz_dispatcher import dispatch_ptz_for_alert
 
 app = FastAPI(title="Drone Acoustic Network API")
@@ -68,6 +69,10 @@ def get_alerts(limit: int = 50):
 def get_fusion():
     alert: FusedAlert = fuse_events(db.recent_events(limit=200))
     return alert.model_dump(mode="json")
+
+@app.get("/map/state")
+def get_map_state():
+    return map_state_from_db(db)
 
 @app.get("/stations/latest")
 def get_latest_by_station():

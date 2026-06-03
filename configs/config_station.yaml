@@ -1,9 +1,12 @@
 station:
+  id: station_001
   station_id: station_001
   name: Home Mac Test Node1
   latitude: 32.0853
   longitude: 34.7818
   altitude_m: 20.0
+  heading_offset_deg: 0.0
+  location_label: ""
 
 
 audio:

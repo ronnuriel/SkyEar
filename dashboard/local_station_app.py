@@ -217,6 +217,21 @@ def main() -> None:
     beam_cols[3].metric("Beam SNR", f"{float(beam.get('beam_snr_gain_db') or 0.0):.1f} dB" if beam.get("beam_snr_gain_db") is not None else "n/a")
     beam_cols[4].metric("Bearing stable", "yes" if beam.get("bearing_stable") else "no")
     beam_cols[5].metric("Server", "send failed" if server.get("last_send_error") else "ok")
+    metadata = event.get("metadata") or {}
+    lat = event.get("station_latitude") or metadata.get("latitude")
+    lon = event.get("station_longitude") or metadata.get("longitude")
+    label = event.get("station_location_label") or metadata.get("location_label")
+    if lat is not None and lon is not None:
+        st.caption(f"Station location: {lat}, {lon}" + (f" ({label})" if label else ""))
+    else:
+        st.warning("Station location missing")
+    bearing = beam.get("estimated_azimuth_deg") or event.get("estimated_azimuth_deg")
+    uncertainty = beam.get("bearing_uncertainty_deg") or event.get("bearing_uncertainty_deg")
+    if bearing is not None:
+        if uncertainty is not None:
+            st.caption(f"Bearing cue: {float(bearing):.0f}° ± {float(uncertainty):.0f}°")
+        else:
+            st.caption(f"Bearing cue: {float(bearing):.0f}°")
 
     tab_wave, tab_spec, tab_sgram, tab_history = st.tabs(["Waveform", "Spectrum", "Spectrogram", "Evidence History"])
     with tab_wave:

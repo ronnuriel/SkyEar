@@ -71,6 +71,7 @@ skyear-stream-manifest = "tools.stream_manifest_dataset:main"
 skyear-eval-audio = "tools.eval_audio:main"
 skyear-summarize-benchmark = "tools.summarize_benchmark:main"
 skyear-build-training-splits = "tools.build_training_splits:main"
+skyear-simulate-geo-events = "tools.simulate_geo_events:main"
 
 [tool.setuptools.packages.find]
 include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*", "data*"]
