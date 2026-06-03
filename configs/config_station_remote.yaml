@@ -1,0 +1,65 @@
+station:
+  station_id: remote_station_001
+  name: Remote Station 001
+  latitude: 32.0853
+  longitude: 34.7818
+  altitude_m: 20.0
+  coverage_radius_m: 250.0
+
+audio:
+  device_id: null
+  sample_rate: 44100
+  channels: 1
+  window_sec: 1.0
+
+detector:
+  f0_min: 700
+  f0_max: 1600
+  max_freq: 6000
+  min_harmonics: 3
+  min_suspect_threshold: 16.0
+  min_alert_threshold: 22.0
+  calibration_seconds: 6.0
+  min_alert_duration_sec: 2.0
+  clear_after_sec: 3.0
+
+stability:
+  enabled: true
+  history_windows: 3
+  max_f0_std_hz: 180
+  min_score_windows: 2
+
+hf:
+  enabled: false
+  run_every_n_windows: 4
+  threshold: 0.70
+
+mic_array:
+  profile: remote_mono
+  sync_mode: mono
+  channel_mode: mono
+
+direction:
+  enabled: false
+  array_radius_m: 0.12
+  scan_step_deg: 10
+
+server:
+  url: http://SERVER_IP:8080/events
+  send_interval_sec: 0.5
+  startup_check_enabled: true
+  startup_check_timeout_sec: 2.0
+  api_token: null
+  hmac_secret: null
+
+heartbeat:
+  enabled: true
+  interval_sec: 5.0
+
+local_monitor:
+  enabled: true
+  directory: runtime/stations
+  state_path: runtime/stations/remote_station_001_latest.json
+  history_path: runtime/stations/remote_station_001_history.jsonl
+  waveform_points: 1200
+  history_max_rows: 2000

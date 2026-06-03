@@ -33,13 +33,13 @@ Install the base station/server/dashboard tools:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "skyear @ git+https://github.com/ronnuriel/SkyEar.git@field-ready-roadmap"
+pip install "skyear @ git+https://github.com/ronnuriel/SkyEar.git@main"
 ```
 
 Install with Hugging Face and dataset tools:
 
 ```bash
-pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@field-ready-roadmap"
+pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@main"
 ```
 
 Copy example configs into the current directory:
@@ -198,6 +198,51 @@ configs/config_station_array_8ch.yaml
 
 That config includes `mic_positions_m`, beamforming, HF cadence, and local raw recording settings.
 
+## Running Station On Another Computer
+
+Run the central server on one computer:
+
+```bash
+skyear-server --host 0.0.0.0 --port 8080
+```
+
+Find that computer's LAN/VPN IP, then on the station computer copy the remote template:
+
+```bash
+cp configs/config_station_remote.yaml configs/my_remote_station.yaml
+```
+
+Edit:
+
+```yaml
+station:
+  station_id: remote_station_001
+  name: Remote Station 001
+
+audio:
+  device_id: 0
+
+server:
+  url: http://SERVER_IP:8080/events
+
+local_monitor:
+  enabled: true
+```
+
+Check connectivity from the station computer:
+
+```bash
+skyear-check-server --url http://SERVER_IP:8080
+```
+
+Start the station:
+
+```bash
+skyear-station --config configs/my_remote_station.yaml
+```
+
+If the central server is unreachable, the station prints a warning and still continues local monitor mode. For same-LAN, VPN, temporary tunnel, and reverse proxy deployments, see [docs/NETWORKING.md](docs/NETWORKING.md).
+
 ## Local Monitor
 
 The station writes:
@@ -245,7 +290,7 @@ HF is advisory only. It can support a local candidate when acoustic evidence exi
 Install:
 
 ```bash
-pip install "skyear[hf] @ git+https://github.com/ronnuriel/SkyEar.git@field-ready-roadmap"
+pip install "skyear[hf] @ git+https://github.com/ronnuriel/SkyEar.git@main"
 ```
 
 Enable in config:

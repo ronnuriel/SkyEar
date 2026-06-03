@@ -73,3 +73,29 @@ def test_hf_smoke_test_prints_prediction(monkeypatch, capsys):
     assert code == 0
     assert "p_drone: 0.42" in output
     assert "label: drone" in output
+
+
+def test_server_base_url_from_events_url():
+    assert station_agent.server_base_url_from_events_url("http://host:8080/events") == "http://host:8080"
+    assert station_agent.server_base_url_from_events_url("http://host:8080") == "http://host:8080"
+
+
+def test_startup_connectivity_check_warns_but_returns_failure(monkeypatch):
+    def fake_get(url, timeout):
+        raise RuntimeError("server down")
+
+    monkeypatch.setattr(station_agent.requests, "get", fake_get)
+
+    ok, reason = station_agent.startup_connectivity_check({"url": "http://host:8080/events"})
+
+    assert ok is False
+    assert "RuntimeError" in reason
+
+
+def test_startup_connectivity_check_can_be_disabled():
+    ok, reason = station_agent.startup_connectivity_check(
+        {"url": "http://host:8080/events", "startup_check_enabled": False}
+    )
+
+    assert ok is True
+    assert "disabled" in reason

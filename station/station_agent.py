@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 import requests
 import yaml
+from urllib.parse import urlparse, urlunparse
 
 from shared.auth import auth_headers
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
@@ -100,6 +101,33 @@ def heartbeat_url_from_events_url(events_url: str) -> str:
     if events_url.endswith("/events"):
         return events_url[: -len("/events")] + "/stations/heartbeat"
     return events_url + "/stations/heartbeat"
+
+
+def server_base_url_from_events_url(events_url: str) -> str:
+    parsed = urlparse(str(events_url).strip())
+    if parsed.scheme not in {"http", "https"}:
+        parsed = urlparse("http://" + str(events_url).strip())
+    path = parsed.path.rstrip("/")
+    if path.endswith("/events"):
+        path = path[: -len("/events")]
+    return urlunparse((parsed.scheme, parsed.netloc, path.rstrip("/"), "", "", "")).rstrip("/")
+
+
+def startup_connectivity_check(server_cfg: dict[str, Any]) -> tuple[bool, str]:
+    if not bool(server_cfg.get("startup_check_enabled", True)):
+        return True, "startup server check disabled"
+    url = str(server_cfg.get("url") or "").strip()
+    if not url:
+        return False, "server.url is empty"
+    base_url = server_base_url_from_events_url(url)
+    timeout = float(server_cfg.get("startup_check_timeout_sec", 2.0))
+    try:
+        response = requests.get(f"{base_url}/health", timeout=timeout)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    if response.status_code >= 400:
+        return False, f"HTTP {response.status_code}: {response.text[:200]}"
+    return True, f"{base_url}/health HTTP {response.status_code}"
 
 def _audio_device_label(audio_cfg: dict[str, Any]) -> str | None:
     if audio_cfg.get("device_name"):
@@ -288,6 +316,13 @@ def main():
     local_waveform_points = int(local_monitor_cfg.get("waveform_points", 1200))
     local_history_max_rows = local_monitor_cfg.get("history_max_rows")
     local_history_max_rows = None if local_history_max_rows is None else int(local_history_max_rows)
+
+    server_ok, server_check_reason = startup_connectivity_check(server_cfg)
+    if server_ok:
+        print("[SERVER] connectivity check OK:", server_check_reason)
+    else:
+        print("[WARN] server connectivity check failed:", server_check_reason)
+        print("[WARN] continuing station in local monitor mode; central posting will keep retrying.")
 
     print("Starting station:", station_cfg["station_id"])
 
