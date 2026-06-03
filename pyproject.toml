@@ -61,6 +61,10 @@ skyear-stream-local-dataset = "tools.stream_local_dataset:main"
 skyear-stream-hf-dataset = "tools.stream_hf_dataset:main"
 skyear-build-manifest = "tools.build_audio_manifest:main"
 skyear-eval-manifest = "tools.eval_manifest_dataset:main"
+skyear-start-field-session = "tools.start_field_session:main"
+skyear-mark-field-event = "tools.mark_field_event:main"
+skyear-eval-field-session = "tools.eval_field_session:main"
+skyear-save-debug-capture = "tools.save_debug_capture:main"
 
 [tool.setuptools.packages.find]
 include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*"]

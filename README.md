@@ -372,6 +372,33 @@ skyear-eval-manifest \
   --output-json reports/eval_summary.json
 ```
 
+## Field Test Sessions
+
+Use the field-session tools for engineering dry-runs and labeled data collection. Start with the full checklist in [docs/FIELD_TEST_PROTOCOL.md](docs/FIELD_TEST_PROTOCOL.md).
+
+```bash
+skyear-start-field-session \
+  --location "north test field" \
+  --station-id station_001 \
+  --drone-model DJI_Neo
+
+skyear-mark-field-event \
+  --session field_sessions/<session_id> \
+  --label drone \
+  --distance-m 50 \
+  --drone-model DJI_Neo \
+  --note "hover 30 sec north"
+
+skyear-save-debug-capture \
+  --seconds 30 \
+  --label unknown \
+  --note "manual capture"
+
+skyear-eval-field-session \
+  --session field_sessions/<session_id> \
+  --output-json field_sessions/<session_id>/reports/eval_summary.json
+```
+
 ## Security
 
 By default, local development accepts unauthenticated station events. For field use, set one or both environment variables on the server:
