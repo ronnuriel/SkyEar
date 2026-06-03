@@ -9,4 +9,3 @@ sounddevice==0.5.5
 streamlit==1.50.0
 requests>=2.31
 pyyaml>=6.0
-dashboard

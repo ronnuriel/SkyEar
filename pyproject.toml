@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skyear"
+version = "0.1.0"
+description = "Passive acoustic station network for drone-like rotor evidence."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+  { name = "Ron Nuriel" }
+]
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn==0.34.0",
+  "pydantic==2.10.4",
+  "numpy>=1.24,<2",
+  "scipy>=1.10",
+  "pandas>=2.0",
+  "matplotlib>=3.7",
+  "sounddevice==0.5.5",
+  "streamlit==1.50.0",
+  "requests>=2.31",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+hf = [
+  "torch",
+  "transformers",
+]
+datasets = [
+  "datasets",
+  "soundfile",
+  "librosa",
+]
+dev = [
+  "pytest",
+  "build",
+]
+all = [
+  "torch",
+  "transformers",
+  "datasets",
+  "soundfile",
+  "librosa",
+]
+
+[project.scripts]
+skyear-station = "station.station_agent:main"
+skyear-server = "server.cli:main"
+skyear-dashboard = "dashboard.cli:main_dashboard"
+skyear-spectrum = "dashboard.cli:main_spectrum"
+skyear-local-monitor = "dashboard.cli:main_local_monitor"
+skyear-copy-configs = "tools.copy_configs:main"
+skyear-hf-test = "tools.test_hf_detector:main"
+skyear-stream-local-dataset = "tools.stream_local_dataset:main"
+skyear-stream-hf-dataset = "tools.stream_hf_dataset:main"
+skyear-build-manifest = "tools.build_audio_manifest:main"
+skyear-eval-manifest = "tools.eval_manifest_dataset:main"
+
+[tool.setuptools.packages.find]
+include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*"]
+
+[tool.setuptools.package-data]
+configs = ["*.yaml"]
