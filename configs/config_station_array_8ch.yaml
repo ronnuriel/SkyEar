@@ -74,7 +74,7 @@ ptz:
 
 direction:
   enabled: true
-  array_radius_m: 0.12
+  array_radius_m: 0.35
   scan_step_deg: 5
 
 server:

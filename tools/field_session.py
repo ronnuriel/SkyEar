@@ -17,11 +17,13 @@ from tools.eval_manifest_dataset import _is_alert, _is_candidate, _is_strong
 
 FIELD_LABELS = {"drone", "background", "helicopter", "wind", "vehicle", "unknown"}
 NOTES_FIELDNAMES = [
+    "timestamp",
     "timestamp_unix",
     "iso_time",
     "label",
     "distance_m",
     "drone_model",
+    "bearing_deg",
     "ground_truth_bearing_deg",
     "maneuver",
     "station_id",
@@ -89,6 +91,7 @@ def append_field_note(
     distance_m: float | None = None,
     drone_model: str = "",
     note: str = "",
+    bearing_deg: float | None = None,
     ground_truth_bearing_deg: float | None = None,
     maneuver: str = "",
     station_id: str = "",
@@ -98,13 +101,16 @@ def append_field_note(
     if label not in FIELD_LABELS:
         raise ValueError(f"unsupported field label: {label}")
     timestamp_unix = time.time() if timestamp_unix is None else float(timestamp_unix)
+    bearing_value = bearing_deg if bearing_deg is not None else ground_truth_bearing_deg
     row = {
+        "timestamp": timestamp_unix,
         "timestamp_unix": timestamp_unix,
         "iso_time": datetime.fromtimestamp(timestamp_unix, timezone.utc).isoformat(),
         "label": label,
         "distance_m": distance_m,
         "drone_model": drone_model,
-        "ground_truth_bearing_deg": ground_truth_bearing_deg,
+        "bearing_deg": bearing_value,
+        "ground_truth_bearing_deg": bearing_value,
         "maneuver": maneuver,
         "station_id": station_id,
         "note": note,
@@ -212,7 +218,7 @@ def assign_rows_to_field_notes(
                 break
         merged = dict(row)
         if matched is not None:
-            for key in ("label", "distance_m", "drone_model", "ground_truth_bearing_deg", "maneuver", "note"):
+            for key in ("label", "distance_m", "drone_model", "bearing_deg", "ground_truth_bearing_deg", "maneuver", "note"):
                 if matched.get(key) not in (None, ""):
                     merged[key] = matched.get(key)
             merged["field_event_timestamp_unix"] = _timestamp(matched)
@@ -243,8 +249,8 @@ def field_session_summary(
         field_start = _timestamp(drone_rows[0]) if drone_rows else None
         bearing_errors = []
         for row in ordered:
-            truth = _float_or_none(row.get("ground_truth_bearing_deg"))
-            estimated = _float_or_none(row.get("estimated_azimuth_deg") or row.get("bearing_deg"))
+            truth = _float_or_none(row.get("ground_truth_bearing_deg") or row.get("bearing_deg"))
+            estimated = _float_or_none(row.get("estimated_azimuth_deg") or row.get("estimated_bearing_deg"))
             if truth is not None and estimated is not None:
                 bearing_errors.append(_angle_error_deg(estimated, truth))
         distance_summary[distance] = {

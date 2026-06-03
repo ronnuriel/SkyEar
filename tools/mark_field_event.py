@@ -13,6 +13,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--distance-m", type=float)
     parser.add_argument("--drone-model", default="")
     parser.add_argument("--note", default="")
+    parser.add_argument("--bearing-deg", type=float)
     parser.add_argument("--ground-truth-bearing-deg", type=float)
     parser.add_argument("--maneuver", default="")
     parser.add_argument("--station-id", default="")
@@ -28,6 +29,7 @@ def main() -> None:
         distance_m=args.distance_m,
         drone_model=args.drone_model,
         note=args.note,
+        bearing_deg=args.bearing_deg,
         ground_truth_bearing_deg=args.ground_truth_bearing_deg,
         maneuver=args.maneuver,
         station_id=args.station_id,

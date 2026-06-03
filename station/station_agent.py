@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse, time
+import copy
 import json
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from urllib.parse import urlparse, urlunparse
 
 from shared.auth import auth_headers
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
+from station.array_profiles import array_profile
 from station.audio_capture import audio_blocks, list_input_devices, to_mono
 from station.beamforming import BeamformingResult, estimate_bearing
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
@@ -63,6 +65,29 @@ def load_config_or_exit(path: str | Path, default_path: str = DEFAULT_CONFIG_PAT
             file=sys.stderr,
         )
     raise SystemExit(2)
+
+
+def apply_mic_array_profile_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
+    resolved = copy.deepcopy(cfg)
+    mic_cfg = resolved.setdefault("mic_array", {})
+    profile_name = mic_cfg.get("profile")
+    if not profile_name:
+        return resolved
+    profile = array_profile(str(profile_name))
+    if profile is None:
+        raise ValueError(f"Unknown mic_array.profile: {profile_name}")
+
+    if not mic_cfg.get("mic_positions_m") and profile.get("mic_positions_m"):
+        mic_cfg["mic_positions_m"] = profile["mic_positions_m"]
+    if not mic_cfg.get("sync_mode") and profile.get("sync_mode"):
+        mic_cfg["sync_mode"] = profile["sync_mode"]
+
+    beam_profile = profile.get("beamforming") or {}
+    beam_cfg = resolved.setdefault("beamforming", {})
+    for key in ("low_hz", "high_hz"):
+        if key not in beam_cfg and key in beam_profile:
+            beam_cfg[key] = beam_profile[key]
+    return resolved
 
 def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | None = None, hf_cfg: dict[str, Any] | None = None) -> StationDetectorStateConfig:
     stability_cfg = stability_cfg or {}
@@ -280,6 +305,11 @@ def main():
         return
 
     cfg = load_config_or_exit(args.config)
+    try:
+        cfg = apply_mic_array_profile_defaults(cfg)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
     if args.hf_smoke_test:
         raise SystemExit(run_hf_smoke_test(cfg))
 

@@ -99,3 +99,46 @@ def test_startup_connectivity_check_can_be_disabled():
 
     assert ok is True
     assert "disabled" in reason
+
+
+def test_mic_array_profile_fills_field_positions():
+    cfg = {
+        "audio": {"channels": 8},
+        "mic_array": {"profile": "field_8ch_r0_35m", "sync_mode": "synchronized"},
+        "beamforming": {"enabled": True},
+    }
+
+    resolved = station_agent.apply_mic_array_profile_defaults(cfg)
+
+    assert len(resolved["mic_array"]["mic_positions_m"]) == 8
+    assert resolved["beamforming"]["low_hz"] == 500
+    assert resolved["beamforming"]["high_hz"] == 3000
+
+
+def test_explicit_mic_positions_win_over_profile():
+    explicit_positions = [[1.0, 2.0, 3.0]]
+    cfg = {
+        "mic_array": {
+            "profile": "field_8ch_r0_35m",
+            "sync_mode": "synchronized",
+            "mic_positions_m": explicit_positions,
+        },
+        "beamforming": {"low_hz": 100, "high_hz": 7000},
+    }
+
+    resolved = station_agent.apply_mic_array_profile_defaults(cfg)
+
+    assert resolved["mic_array"]["mic_positions_m"] == explicit_positions
+    assert resolved["beamforming"]["low_hz"] == 100
+    assert resolved["beamforming"]["high_hz"] == 7000
+
+
+def test_unknown_mic_array_profile_fails_cleanly():
+    cfg = {"mic_array": {"profile": "missing_profile"}}
+
+    try:
+        station_agent.apply_mic_array_profile_defaults(cfg)
+    except ValueError as exc:
+        assert "Unknown mic_array.profile: missing_profile" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")

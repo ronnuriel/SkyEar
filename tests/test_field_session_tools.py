@@ -42,6 +42,7 @@ def test_mark_field_event_appends_valid_notes_row(tmp_path):
         label="drone",
         distance_m=50,
         drone_model="DJI_Neo",
+        bearing_deg=12.5,
         note="hover 30 sec north",
         timestamp_unix=1000.0,
     )
@@ -53,6 +54,7 @@ def test_mark_field_event_appends_valid_notes_row(tmp_path):
     assert rows[0]["label"] == "drone"
     assert rows[0]["distance_m"] == "50"
     assert rows[0]["drone_model"] == "DJI_Neo"
+    assert rows[0]["bearing_deg"] == "12.5"
     assert rows[0]["note"] == "hover 30 sec north"
 
 
