@@ -178,6 +178,10 @@ def main() -> None:
     auto_refresh = st.sidebar.checkbox("Auto refresh", value=True)
 
     try:
+        if not state_path.exists():
+            raise FileNotFoundError(
+                f"Local station state not found: {state_path}. Start skyear-station first or pass --state PATH."
+            )
         snapshot = load_snapshot(state_path)
     except Exception as exc:
         st.error(f"Could not read local station state: {exc}")

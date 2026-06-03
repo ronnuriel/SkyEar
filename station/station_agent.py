@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse, time
 import json
+import sys
 from pathlib import Path
 from typing import Any
 import numpy as np
@@ -26,6 +27,7 @@ from station.raw_recorder import RawRingBufferRecorder
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
 DETECTOR_VERSION = "station-detector-state-v1"
+DEFAULT_CONFIG_PATH = "configs/config_station.yaml"
 
 
 class HFErrorReporter:
@@ -44,6 +46,23 @@ class HFErrorReporter:
 def load_yaml(path: str | Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def load_config_or_exit(path: str | Path, default_path: str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+    path = Path(path)
+    if path.exists():
+        return load_yaml(path)
+    if str(path) == default_path:
+        print(
+            "Default config not found. Run: skyear-copy-configs ./configs or pass --config PATH",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Config not found: {path}. Run: skyear-copy-configs ./configs or pass --config PATH",
+            file=sys.stderr,
+        )
+    raise SystemExit(2)
 
 def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | None = None, hf_cfg: dict[str, Any] | None = None) -> StationDetectorStateConfig:
     stability_cfg = stability_cfg or {}
@@ -248,7 +267,7 @@ def run_hf_smoke_test(cfg: dict[str, Any]) -> int:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/config_station.yaml")
+    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--list-devices", action="store_true")
     parser.add_argument("--hf-smoke-test", action="store_true")
     args = parser.parse_args()
@@ -258,7 +277,7 @@ def main():
             print(d)
         return
 
-    cfg = load_yaml(args.config)
+    cfg = load_config_or_exit(args.config)
     if args.hf_smoke_test:
         raise SystemExit(run_hf_smoke_test(cfg))
 

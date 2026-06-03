@@ -8,6 +8,9 @@ def _run_streamlit(script_name: str, extra_args: list[str] | None = None) -> Non
     from streamlit.web import cli as streamlit_cli
 
     script_path = Path(__file__).with_name(script_name)
+    if not script_path.exists():
+        print(f"SkyEar dashboard app not found: {script_path}", file=sys.stderr)
+        raise SystemExit(2)
     sys.argv = ["streamlit", "run", str(script_path), *(extra_args or sys.argv[1:])]
     raise SystemExit(streamlit_cli.main())
 

@@ -31,16 +31,18 @@ def copy_configs(destination: Path, overwrite: bool = False) -> list[Path]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Copy packaged SkyEar station config templates.")
-    parser.add_argument("destination", nargs="?", default="configs", type=Path)
+    parser.add_argument("destination", nargs="?", type=Path)
+    parser.add_argument("--output", type=Path, help="Destination directory. Same as the positional destination.")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
-    copied = copy_configs(args.destination, overwrite=args.overwrite)
+    destination = args.output or args.destination or Path("configs")
+    copied = copy_configs(destination, overwrite=args.overwrite)
     if copied:
         for path in copied:
             print(path)
     else:
-        print(f"No configs copied; files already exist in {args.destination}. Use --overwrite to replace them.")
+        print(f"No configs copied; files already exist in {destination}. Use --overwrite to replace them.")
 
 
 if __name__ == "__main__":

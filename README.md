@@ -48,6 +48,18 @@ Copy example configs into the current directory:
 skyear-copy-configs configs
 ```
 
+You can also copy them to a temporary or deployment directory:
+
+```bash
+skyear-copy-configs /tmp/skyear_configs
+```
+
+Console commands such as `skyear-station` and `skyear-server` are available inside the active virtual environment unless you installed SkyEar system-wide. After reconnecting over SSH, activate the venv again:
+
+```bash
+source /tmp/skyear_git_install_test/bin/activate
+```
+
 ## Install From A Local Checkout
 
 ```bash
