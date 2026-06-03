@@ -30,4 +30,5 @@ test -f "$TMP_DIR/configs2/config_station.yaml"
 test -f "$TMP_DIR/configs2/config_station_remote.yaml"
 
 skyear-check-server --help >/dev/null
+skyear-simulate-geo-events --help >/dev/null
 echo "release smoke OK: $TMP_DIR"

@@ -55,6 +55,7 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
         bearing = None
         if event is not None:
             bearing = event.estimated_azimuth_deg if event.estimated_azimuth_deg is not None else event_meta.get("bearing_deg")
+        health_label, health_source, last_seen_sec_ago = _map_health(item)
         stations.append(
             {
                 "station_id": station_id,
@@ -63,8 +64,9 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
                 "longitude": longitude,
                 "altitude_m": (event.station_altitude_m if event else None) or event_meta.get("altitude_m") or (heartbeat.get("metadata") or {}).get("altitude_m"),
                 "location_label": (event.station_location_label if event else None) or event_meta.get("location_label") or (heartbeat.get("metadata") or {}).get("location_label"),
-                "last_seen_sec_ago": item.get("heartbeat_age_sec") if item.get("heartbeat_age_sec") is not None else item.get("event_age_sec"),
-                "health": _health_label(item.get("alive_state")),
+                "last_seen_sec_ago": last_seen_sec_ago,
+                "health": health_label,
+                "health_source": health_source,
                 "last_status": item.get("last_event_status"),
                 "operator_label": event.operator_label if event else None,
                 "ml_drone_pct": event.ml_drone_pct if event else None,
@@ -91,3 +93,21 @@ def _health_label(alive_state: str | None) -> str:
     if alive_state in {"stale", "error"}:
         return "degraded" if alive_state == "error" else "stale"
     return "offline"
+
+
+def _event_fallback_health(event_age_sec: float | None) -> str:
+    if event_age_sec is None:
+        return "offline"
+    if event_age_sec < 10.0:
+        return "online"
+    if event_age_sec < 60.0:
+        return "stale"
+    return "offline"
+
+
+def _map_health(item: dict[str, Any]) -> tuple[str, str, float | None]:
+    heartbeat_age = item.get("heartbeat_age_sec")
+    event_age = item.get("event_age_sec")
+    if heartbeat_age is not None:
+        return _health_label(item.get("alive_state")), "heartbeat", heartbeat_age
+    return _event_fallback_health(event_age), "event_fallback", event_age

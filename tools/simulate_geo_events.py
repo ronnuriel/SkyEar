@@ -5,7 +5,8 @@ import time
 
 import requests
 
-from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
+from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
+from station.station_agent import heartbeat_url_from_events_url
 
 
 def build_geo_event(
@@ -55,6 +56,33 @@ def build_geo_event(
     )
 
 
+def build_geo_heartbeat(event: AcousticEvent, *, status: str = "online") -> StationHeartbeat:
+    metadata = {
+        "source": "simulate_geo_events",
+        "latitude": event.station_latitude,
+        "longitude": event.station_longitude,
+        "altitude_m": event.station_altitude_m,
+        "heading_offset_deg": event.station_heading_offset_deg,
+        "location_label": event.station_location_label,
+        "status": status,
+    }
+    return StationHeartbeat(
+        station_id=event.station_id,
+        station_name=event.station_name,
+        timestamp_unix=time.time(),
+        status=status,
+        station_location=event.station_location,
+        sample_rate=44100,
+        channels=1,
+        calibrated=True,
+        detector_version="simulated-geo-events-v1",
+        last_event_status=event.status.value if hasattr(event.status, "value") else str(event.status),
+        last_harmonic_score=event.harmonic_score,
+        last_hf_p_drone=event.hf_p_drone,
+        metadata=metadata,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Post synthetic passive geo events for SkyEar map testing.")
     parser.add_argument("--server", default="http://127.0.0.1:8080/events")
@@ -64,6 +92,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--station-b-lat", type=float, required=True)
     parser.add_argument("--station-b-lon", type=float, required=True)
     parser.add_argument("--station-b-bearing", type=float, required=True)
+    parser.set_defaults(heartbeat=True)
+    parser.add_argument("--heartbeat", dest="heartbeat", action="store_true", help="Post station heartbeats after events. Default: enabled.")
+    parser.add_argument("--no-heartbeat", dest="heartbeat", action="store_false", help="Do not post simulated station heartbeats.")
     return parser.parse_args()
 
 
@@ -83,10 +114,16 @@ def main() -> None:
             bearing=args.station_b_bearing,
         ),
     ]
+    heartbeat_url = heartbeat_url_from_events_url(args.server)
     for event in events:
         response = requests.post(args.server, json=event.model_dump(mode="json"), timeout=2.0)
         response.raise_for_status()
         print(f"posted {event.station_id} bearing={event.estimated_azimuth_deg}")
+        if args.heartbeat:
+            heartbeat = build_geo_heartbeat(event)
+            heartbeat_response = requests.post(heartbeat_url, json=heartbeat.model_dump(mode="json"), timeout=2.0)
+            heartbeat_response.raise_for_status()
+            print(f"posted heartbeat {event.station_id} status={heartbeat.status}")
 
 
 if __name__ == "__main__":

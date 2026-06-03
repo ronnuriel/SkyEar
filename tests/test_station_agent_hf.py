@@ -115,6 +115,17 @@ def test_mic_array_profile_fills_field_positions():
     assert resolved["beamforming"]["high_hz"] == 3000
 
 
+def test_mono_mic_array_profiles_are_known_without_positions():
+    for profile_name in ("mac_builtin_mono", "remote_mono"):
+        resolved = station_agent.apply_mic_array_profile_defaults(
+            {"audio": {"channels": 1}, "mic_array": {"profile": profile_name}}
+        )
+
+        assert resolved["mic_array"]["profile"] == profile_name
+        assert resolved["mic_array"]["sync_mode"] == "mono"
+        assert "mic_positions_m" not in resolved["mic_array"]
+
+
 def test_explicit_mic_positions_win_over_profile():
     explicit_positions = [[1.0, 2.0, 3.0]]
     cfg = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 
 from dashboard.map_view import normalize_map_state, stations_missing_location
@@ -12,8 +13,9 @@ from server.geo import (
     haversine_distance_m,
     intersect_bearings,
 )
+from server.geo_fusion import map_state_from_db
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
-from tools.simulate_geo_events import build_geo_event
+from tools.simulate_geo_events import build_geo_event, build_geo_heartbeat, main as simulate_geo_main
 
 
 def setup_function():
@@ -82,6 +84,8 @@ def test_two_bearing_intersection_returns_near_expected_point():
 
     assert result is not None
     assert haversine_distance_m(target["latitude"], target["longitude"], result["latitude"], result["longitude"]) < 25.0
+    assert result["bearing_cross_angle_deg"] == pytest_approx(90.0, 1.0)
+    assert result["bearing_geometry_quality"] == "good"
 
 
 def test_one_station_returns_sector_only_no_point():
@@ -113,9 +117,35 @@ def test_map_state_includes_stations_and_estimates():
     state = get_map_state()
 
     assert len(state["stations"]) == 2
-    assert state["bearing_cues"]
+    assert len(state["bearing_cues"]) >= 2
     assert state["geo_estimates"]
     assert state["geo_estimates"][0]["estimate_type"] in {"bearing_intersection", "multi_station_area"}
+
+
+def test_map_state_uses_recent_event_health_fallback_without_heartbeat():
+    now = time.time()
+    db.add_event(_candidate_event("event_only", 32.0, 34.0, 60.0, now=now))
+
+    state = map_state_from_db(db, now=now + 8.0)
+    station = state["stations"][0]
+
+    assert station["health"] == "online"
+    assert station["health_source"] == "event_fallback"
+
+
+def test_map_state_prefers_heartbeat_health_source():
+    now = time.time()
+    event = _candidate_event("heartbeat_station", 32.0, 34.0, 60.0, now=now)
+    db.add_event(event)
+    heartbeat = build_geo_heartbeat(event)
+    heartbeat.server_received_unix = now + 1.0
+    db.add_heartbeat(heartbeat)
+
+    state = map_state_from_db(db, now=now + 2.0)
+    station = state["stations"][0]
+
+    assert station["health"] == "online"
+    assert station["health_source"] == "heartbeat"
 
 
 def test_dashboard_map_state_parser_handles_missing_optional_fields():
@@ -136,6 +166,119 @@ def test_simulated_geo_events_create_map_estimate():
 
     assert len(state["geo_estimates"]) == 1
     assert state["geo_estimates"][0]["latitude"] is not None
+
+
+def test_simulate_geo_events_cli_posts_events_and_heartbeats(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, json, timeout):
+        calls.append((url, json, timeout))
+        return Response()
+
+    monkeypatch.setattr("requests.post", fake_post)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "simulate_geo_events",
+            "--server",
+            "http://server:8080/events",
+            "--station-a-lat",
+            "31.9955",
+            "--station-a-lon",
+            "34.0",
+            "--station-a-bearing",
+            "0",
+            "--station-b-lat",
+            "32.0",
+            "--station-b-lon",
+            "34.0053",
+            "--station-b-bearing",
+            "270",
+        ],
+    )
+
+    simulate_geo_main()
+
+    assert [call[0] for call in calls] == [
+        "http://server:8080/events",
+        "http://server:8080/stations/heartbeat",
+        "http://server:8080/events",
+        "http://server:8080/stations/heartbeat",
+    ]
+    assert calls[1][1]["metadata"]["latitude"] == 31.9955
+    assert calls[1][1]["metadata"]["status"] == "online"
+
+
+def test_simulate_geo_events_cli_can_disable_heartbeats(monkeypatch):
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr("requests.post", lambda url, json, timeout: calls.append((url, json)) or Response())
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "simulate_geo_events",
+            "--server",
+            "http://server:8080/events",
+            "--station-a-lat",
+            "31.9955",
+            "--station-a-lon",
+            "34.0",
+            "--station-a-bearing",
+            "0",
+            "--station-b-lat",
+            "32.0",
+            "--station-b-lon",
+            "34.0053",
+            "--station-b-bearing",
+            "270",
+            "--no-heartbeat",
+        ],
+    )
+
+    simulate_geo_main()
+
+    assert [call[0] for call in calls] == ["http://server:8080/events", "http://server:8080/events"]
+
+
+def test_poor_bearing_cross_angle_lowers_confidence():
+    now = 1000.0
+    target = {"latitude": 32.0, "longitude": 34.0}
+    good_station_a = destination_point(target["latitude"], target["longitude"], 180.0, 500.0)
+    good_station_b = destination_point(target["latitude"], target["longitude"], 90.0, 500.0)
+    poor_station_a = destination_point(target["latitude"], target["longitude"], 180.0, 500.0)
+    poor_station_b = destination_point(target["latitude"], target["longitude"], 190.0, 500.0)
+
+    good = estimate_from_recent_bearings(
+        [
+            _candidate_event("good_a", good_station_a["latitude"], good_station_a["longitude"], 0.0, now=now),
+            _candidate_event("good_b", good_station_b["latitude"], good_station_b["longitude"], 270.0, now=now),
+        ],
+        max_age_sec=10.0,
+        now=now + 1.0,
+    )
+    poor = estimate_from_recent_bearings(
+        [
+            _candidate_event("poor_a", poor_station_a["latitude"], poor_station_a["longitude"], 0.0, now=now),
+            _candidate_event("poor_b", poor_station_b["latitude"], poor_station_b["longitude"], 10.0, now=now),
+        ],
+        max_age_sec=10.0,
+        now=now + 1.0,
+    )
+
+    assert good["bearing_geometry_quality"] == "good"
+    assert poor["bearing_geometry_quality"] == "poor"
+    assert poor["bearing_cross_angle_deg"] < 20.0
+    assert poor["confidence"] < good["confidence"]
 
 
 def pytest_approx(value: float, abs_tol: float):

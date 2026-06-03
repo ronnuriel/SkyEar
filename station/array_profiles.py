@@ -12,6 +12,16 @@ def circular_mic_positions(channels: int, radius_m: float) -> list[list[float]]:
 
 
 ARRAY_PROFILES: dict[str, dict] = {
+    "mac_builtin_mono": {
+        "channels": 1,
+        "sync_mode": "mono",
+        "channel_mode": "mono",
+    },
+    "remote_mono": {
+        "channels": 1,
+        "sync_mode": "mono",
+        "channel_mode": "mono",
+    },
     "compact_8ch_r0_12m": {
         "channels": 8,
         "radius_m": 0.12,

@@ -123,7 +123,43 @@ def intersect_bearings(station_bearings: list[dict[str, Any]]) -> dict[str, Any]
         "radius_m": radius,
         "bearing_residual_deg": min(180.0, radius / 20.0),
         "source_station_ids": [str(item.get("station_id")) for item in valid],
+        "bearing_cross_angle_deg": bearing_cross_angle_deg(valid),
+        "bearing_geometry_quality": bearing_geometry_quality(valid),
     }
+
+
+def _bearing_delta_deg(a: float, b: float) -> float:
+    return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
+
+
+def bearing_cross_angle_deg(station_bearings: list[dict[str, Any]]) -> float | None:
+    bearings = [float(item["bearing_deg"]) % 360.0 for item in station_bearings if item.get("bearing_deg") is not None]
+    if len(bearings) < 2:
+        return None
+    angles = []
+    for a, b in combinations(bearings, 2):
+        angles.append(_bearing_delta_deg(a, b))
+    return min(angles, key=lambda value: min(value, 180.0 - value))
+
+
+def bearing_geometry_quality(station_bearings: list[dict[str, Any]]) -> str:
+    angle = bearing_cross_angle_deg(station_bearings)
+    if angle is None:
+        return "poor"
+    if angle < 20.0 or angle > 160.0:
+        return "poor"
+    if angle < 40.0 or angle > 140.0:
+        return "fair"
+    return "good"
+
+
+def confidence_for_bearing_geometry(confidence: float, quality: str) -> float:
+    confidence = float(confidence)
+    if quality == "poor":
+        return max(0.1, min(confidence, confidence * 0.55))
+    if quality == "fair":
+        return max(0.1, min(confidence, confidence * 0.85))
+    return confidence
 
 
 def _event_location(event: Any) -> tuple[float | None, float | None, float | None]:
@@ -205,14 +241,20 @@ def estimate_from_recent_bearings(events: list[Any], max_age_sec: float = 10.0, 
         }
     intersection = intersect_bearings(bearings)
     if intersection is None:
+        cross_angle = bearing_cross_angle_deg(bearings)
+        quality = bearing_geometry_quality(bearings)
         return {
             "estimate_type": "multi_station_area",
-            "confidence": 0.35,
+            "confidence": confidence_for_bearing_geometry(0.35, quality),
             "source_station_ids": [item["station_id"] for item in bearings],
+            "bearing_cross_angle_deg": cross_angle,
+            "bearing_geometry_quality": quality,
             "reason": "multiple bearing cues did not intersect cleanly",
         }
     radius = float(intersection.get("radius_m") or 150.0)
     confidence = max(0.35, min(0.9, 1.0 - radius / 1000.0))
+    quality = str(intersection.get("bearing_geometry_quality") or bearing_geometry_quality(bearings))
+    confidence = confidence_for_bearing_geometry(confidence, quality)
     return {
         "estimate_type": "bearing_intersection" if len(bearings) == 2 else "multi_station_area",
         "latitude": intersection["latitude"],
@@ -221,6 +263,8 @@ def estimate_from_recent_bearings(events: list[Any], max_age_sec: float = 10.0, 
         "confidence": confidence,
         "source_station_ids": intersection["source_station_ids"],
         "bearing_residual_deg": intersection.get("bearing_residual_deg"),
+        "bearing_cross_angle_deg": intersection.get("bearing_cross_angle_deg"),
+        "bearing_geometry_quality": quality,
         "area_polygon": _circle_polygon(intersection["latitude"], intersection["longitude"], radius),
         "reason": "approximate acoustic candidate location from multiple passive bearing cues",
     }
