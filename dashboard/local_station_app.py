@@ -19,7 +19,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a local per-station SkyEar monitor.")
     parser.add_argument("--state", default="runtime/stations/station_001_latest.json")
     parser.add_argument("--history")
-    parser.add_argument("--refresh-sec", type=float, default=0.5)
+    parser.add_argument("--refresh-sec", type=float, default=1.0)
     args, _ = parser.parse_known_args(argv)
     return args
 
@@ -148,21 +148,39 @@ def _show_history(rows: list[dict[str, Any]]) -> None:
     st.dataframe(df.tail(25), width="stretch")
 
 
-def _show_warnings(snapshot: dict[str, Any], event: dict[str, Any], hf: dict[str, Any], server: dict[str, Any]) -> None:
+def _warning_messages(
+    snapshot: dict[str, Any],
+    event: dict[str, Any],
+    hf: dict[str, Any],
+    server: dict[str, Any],
+) -> list[str]:
+    messages = []
     if snapshot_is_stale(snapshot):
-        st.warning("Local station state is stale")
+        messages.append("Local station state is stale")
     if hf.get("error") or event.get("hf_error"):
-        st.warning("HF unavailable — harmonic-only mode, alert disabled")
+        messages.append("HF unavailable — harmonic-only mode, alert disabled")
     if server.get("last_send_error"):
-        st.warning(f"Server send failed: {server['last_send_error']}")
+        messages.append(f"Server send failed: {server['last_send_error']}")
     if server.get("last_heartbeat_error"):
-        st.warning(f"Heartbeat failed: {server['last_heartbeat_error']}")
+        messages.append(f"Heartbeat failed: {server['last_heartbeat_error']}")
     peak = float(event.get("peak") or 0.0)
     rms = float(event.get("rms") or 0.0)
     if peak >= 0.95:
-        st.warning("Input peak is very high; clipping risk")
+        messages.append("Input peak is very high; clipping risk")
     if rms <= 1e-5:
-        st.warning("Very low RMS; microphone may be disconnected or muted")
+        messages.append("Very low RMS; microphone may be disconnected or muted")
+    return messages
+
+
+def _show_warnings(snapshot: dict[str, Any], event: dict[str, Any], hf: dict[str, Any], server: dict[str, Any]) -> None:
+    with st.container(border=True):
+        st.markdown("#### Station warnings")
+        messages = _warning_messages(snapshot, event, hf, server)
+        if messages:
+            for message in messages:
+                st.warning(message)
+        else:
+            st.success("No local warnings")
 
 
 def main() -> None:
@@ -199,8 +217,13 @@ def main() -> None:
         title += f" - {snapshot['station_name']}"
     st.title(title)
     st.caption(f"Updated: {time.strftime('%H:%M:%S', time.localtime(float(snapshot.get('updated_unix') or 0.0)))}")
-    _show_warnings(snapshot, event, hf, server)
-    _show_status(event)
+    status_panel = st.container(border=True)
+    warnings_panel = st.container()
+    with status_panel:
+        st.markdown("#### Decision")
+        _show_status(event)
+    with warnings_panel:
+        _show_warnings(snapshot, event, hf, server)
 
     cols = st.columns(6)
     cols[0].metric("HF drone", _metric_pct(event.get("hf_p_drone") or hf.get("p_drone")))

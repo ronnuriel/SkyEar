@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 import time
-from urllib.parse import quote
-
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -15,27 +13,6 @@ STATUS_STYLE = {
     "drone_like": ("DRONE-LIKE", "warning"),
     "alert": ("ALERT", "error"),
 }
-
-
-def spectrum_page_url(station_id: str, server_url: str) -> str:
-    return (
-        "01_station_spectrum"
-        f"?station_id={quote(station_id, safe='')}"
-        f"&server_url={quote(server_url, safe='')}"
-    )
-
-
-def external_spectrum_app_url(
-    station_id: str,
-    server_url: str,
-    spectrum_app_url: str = "http://localhost:8502",
-) -> str:
-    return (
-        spectrum_app_url.rstrip("/")
-        + "/"
-        + f"?station_id={quote(station_id, safe='')}"
-        + f"&server_url={quote(server_url, safe='')}"
-    )
 
 
 def status_label(status: str) -> tuple[str, str]:

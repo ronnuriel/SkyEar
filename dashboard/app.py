@@ -20,6 +20,13 @@ from dashboard.station_view import (
 FUSION_WINDOW_SEC = 8.0
 
 
+def _query_param(name: str, default: str) -> str:
+    value = st.query_params.get(name, default)
+    if isinstance(value, list):
+        return value[0] if value else default
+    return value
+
+
 def _draw_status(status: str):
     label, kind = status_label(status)
     getattr(st, kind)(label)
@@ -134,14 +141,14 @@ st.set_page_config(page_title="SkyEar Operator Dashboard", layout="wide")
 st.title("SkyEar Operator Dashboard")
 st.caption("Passive acoustic warning network - tactical overview.")
 
-server_url = st.sidebar.text_input("Server URL", value="http://127.0.0.1:8080")
+server_url = st.sidebar.text_input("Server URL", value=_query_param("server_url", "http://127.0.0.1:8080"))
 st.sidebar.button("Refresh")
 auto_refresh = st.sidebar.checkbox("Auto refresh", value=True)
 refresh_sec = st.sidebar.number_input(
     "Refresh every seconds",
     min_value=0.5,
     max_value=10.0,
-    value=1.5,
+    value=2.0,
     step=0.5,
 )
 show_inline_mini_spectrum = st.sidebar.checkbox("Show inline mini spectrum", value=False)
@@ -154,101 +161,121 @@ try:
 except Exception as e:
     st.sidebar.error(f"Server unavailable: {e}")
 
-col1, col2, col3 = st.columns(3)
+fusion_panel = st.container()
+map_panel = st.container()
+stations_panel = st.container()
+alerts_panel = st.container()
+
 fusion_level = 0
-try:
-    fusion = requests.get(f"{server_url}/fusion", timeout=2).json()
-    fusion_level = int(fusion.get("level", 0))
-    confidence = float(fusion.get("confidence", 0.0))
-    reason = fusion.get("reason", "")
-    interpretation = fusion.get("interpretation") or "background"
-    tracks = fusion.get("tracks") or []
+with fusion_panel:
+    st.subheader("Fusion")
+    col1, col2, col3 = st.columns(3)
+    try:
+        fusion = requests.get(f"{server_url}/fusion", timeout=2).json()
+        fusion_level = int(fusion.get("level", 0))
+        confidence = float(fusion.get("confidence", 0.0))
+        reason = fusion.get("reason", "")
+        interpretation = fusion.get("interpretation") or "background"
+        tracks = fusion.get("tracks") or []
 
-    if fusion_level >= 3:
-        col1.error(f"LEVEL {fusion_level}")
-    elif fusion_level == 2:
-        col1.warning(f"LEVEL {fusion_level}")
-    elif fusion_level == 1:
-        col1.info(f"LEVEL {fusion_level}")
-    else:
-        col1.success("LEVEL 0")
+        if fusion_level >= 3:
+            col1.error(f"LEVEL {fusion_level}")
+        elif fusion_level == 2:
+            col1.warning(f"LEVEL {fusion_level}")
+        elif fusion_level == 1:
+            col1.info(f"LEVEL {fusion_level}")
+        else:
+            col1.success("LEVEL 0")
 
-    col2.metric("Fusion confidence", f"{confidence:.2f}")
-    col3.metric("Interpretation", interpretation)
-    st.metric("Recommended operator action", operator_action_label(fusion_level).upper())
-    st.caption(f"{reason} | Active tracks: {len(tracks)}")
-    if tracks:
+        col2.metric("Fusion confidence", f"{confidence:.2f}")
+        col3.metric("Interpretation", interpretation)
+        st.metric("Recommended operator action", operator_action_label(fusion_level).upper())
+        st.caption(f"{reason} | Active tracks: {len(tracks)}")
         st.subheader("Active tracks")
-        track_cols = st.columns(min(3, len(tracks)))
-        for idx, track in enumerate(tracks):
-            with track_cols[idx % len(track_cols)]:
-                _draw_track_card(track)
-except Exception as e:
-    st.error(f"Could not load fusion: {e}")
+        if tracks:
+            track_cols = st.columns(min(3, len(tracks)))
+            for idx, track in enumerate(tracks):
+                with track_cols[idx % len(track_cols)]:
+                    _draw_track_card(track)
+        else:
+            st.info("No active tracks.")
+    except Exception as e:
+        col1.error("LEVEL n/a")
+        col2.metric("Fusion confidence", "n/a")
+        col3.metric("Interpretation", "server unavailable")
+        st.error(f"Could not load fusion: {e}")
 
-try:
-    map_state = requests.get(f"{server_url}/map/state", timeout=2).json()
-    render_passive_map(st, map_state)
-except Exception as e:
-    st.info(f"Map / Passive Acoustic Situation unavailable: {e}")
+with map_panel:
+    st.subheader("Map / Passive Acoustic Situation")
+    try:
+        map_state = requests.get(f"{server_url}/map/state", timeout=2).json()
+        render_passive_map(st, map_state)
+    except Exception as e:
+        st.info(f"Map / Passive Acoustic Situation unavailable: {e}")
 
-st.subheader("Stations")
-try:
-    latest_by_station = requests.get(f"{server_url}/stations/latest", timeout=2).json()
-    health_by_station = requests.get(f"{server_url}/stations/health", timeout=2).json()
-    station_events = sorted(latest_by_station.items())
-    heartbeat_only = sorted(
-        (station_id, health)
-        for station_id, health in health_by_station.items()
-        if station_id not in latest_by_station
-    )
-    if not station_events:
-        st.info("No station events yet.")
+with stations_panel:
+    st.subheader("Stations")
+    try:
+        latest_by_station = requests.get(f"{server_url}/stations/latest", timeout=2).json()
+        health_by_station = requests.get(f"{server_url}/stations/health", timeout=2).json()
+        station_events = sorted(latest_by_station.items())
+        heartbeat_only = sorted(
+            (station_id, health)
+            for station_id, health in health_by_station.items()
+            if station_id not in latest_by_station
+        )
+        if not station_events:
+            st.info("No station events yet.")
 
-    for start in range(0, len(station_events), max_stations_per_row):
-        row_events = station_events[start : start + max_stations_per_row]
-        columns = st.columns(len(row_events))
-        for column, (station_id, event) in zip(columns, row_events):
-            with column:
-                _render_station_card(
-                    station_id,
-                    event,
-                    health_by_station.get(station_id),
-                    fusion_level,
-                    show_inline_mini_spectrum,
-                )
-    if heartbeat_only:
-        st.subheader("Online stations without recent events")
-        for start in range(0, len(heartbeat_only), max_stations_per_row):
-            row_items = heartbeat_only[start : start + max_stations_per_row]
-            columns = st.columns(len(row_items))
-            for column, (station_id, health) in zip(columns, row_items):
+        for start in range(0, len(station_events), max_stations_per_row):
+            row_events = station_events[start : start + max_stations_per_row]
+            columns = st.columns(len(row_events))
+            for column, (station_id, event) in zip(columns, row_events):
                 with column:
-                    with st.container(border=True):
-                        st.markdown(f"### {station_id}")
-                        _draw_health_badge(health)
-                        timing = timing_summary(None, health)
-                        st.metric("Last heartbeat", timing["heartbeat_age"])
-                        st.metric("Latency", timing["latency"])
-                        st.caption("Station is online/background; no acoustic event received yet.")
-    bearing_rows = bearing_ray_rows([event for _, event in station_events])
-    if bearing_rows:
+                    _render_station_card(
+                        station_id,
+                        event,
+                        health_by_station.get(station_id),
+                        fusion_level,
+                        show_inline_mini_spectrum,
+                    )
+        st.subheader("Online stations without recent events")
+        if heartbeat_only:
+            for start in range(0, len(heartbeat_only), max_stations_per_row):
+                row_items = heartbeat_only[start : start + max_stations_per_row]
+                columns = st.columns(len(row_items))
+                for column, (station_id, health) in zip(columns, row_items):
+                    with column:
+                        with st.container(border=True):
+                            st.markdown(f"### {station_id}")
+                            _draw_health_badge(health)
+                            timing = timing_summary(None, health)
+                            st.metric("Last heartbeat", timing["heartbeat_age"])
+                            st.metric("Latency", timing["latency"])
+                            st.caption("Station is online/background; no acoustic event received yet.")
+        else:
+            st.info("No heartbeat-only stations.")
+        bearing_rows = bearing_ray_rows([event for _, event in station_events])
         st.subheader("Map bearing cues")
-        st.dataframe(pd.DataFrame(bearing_rows), width="stretch")
-except Exception as e:
-    st.error(f"Could not load stations: {e}")
+        if bearing_rows:
+            st.dataframe(pd.DataFrame(bearing_rows), width="stretch")
+        else:
+            st.info("No bearing cues yet.")
+    except Exception as e:
+        st.error(f"Could not load stations: {e}")
 
-st.caption("Direction is only reliable for synchronized mic array profiles.")
+    st.caption("Direction is only reliable for synchronized mic array profiles.")
 
-st.subheader("Recent alerts")
-try:
-    alerts = requests.get(f"{server_url}/alerts?limit=50", timeout=2).json()
-    if alerts:
-        st.dataframe(pd.DataFrame(alerts).iloc[::-1], width="stretch")
-    else:
-        st.info("No alerts yet.")
-except Exception as e:
-    st.error(f"Could not load alerts: {e}")
+with alerts_panel:
+    st.subheader("Recent alerts")
+    try:
+        alerts = requests.get(f"{server_url}/alerts?limit=50", timeout=2).json()
+        if alerts:
+            st.dataframe(pd.DataFrame(alerts).iloc[::-1], width="stretch")
+        else:
+            st.info("No alerts yet.")
+    except Exception as e:
+        st.error(f"Could not load alerts: {e}")
 
 if auto_refresh:
     time.sleep(float(refresh_sec))
