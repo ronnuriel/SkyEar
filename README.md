@@ -62,6 +62,40 @@ source /tmp/skyear_git_install_test/bin/activate
 
 When copying command blocks into `zsh`, paste only the command lines. If interactive comments are disabled, shell comment lines that start with `#` can be treated as commands instead of comments.
 
+## Install From A Field Alpha Release
+
+After the `v0.1.0-field-alpha` tag is pushed, GitHub Actions builds the release package and attaches:
+
+- `skyear-0.1.0-py3-none-any.whl`
+- `skyear-0.1.0.tar.gz`
+
+You can see them in GitHub under `Releases` -> `v0.1.0-field-alpha`. They are not committed to the repository because `dist/` is intentionally ignored.
+
+Install directly from the Git tag:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@v0.1.0-field-alpha"
+```
+
+Or download the wheel from the GitHub Release and install that file:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install ./skyear-0.1.0-py3-none-any.whl
+```
+
+If you build locally, the package files are written only to local `dist/`:
+
+```bash
+python -m pip install build
+python -m build
+ls dist/
+pip install dist/skyear-0.1.0-py3-none-any.whl
+```
+
 ## Install From A Local Checkout
 
 ```bash

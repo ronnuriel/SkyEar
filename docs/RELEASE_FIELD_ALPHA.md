@@ -64,6 +64,25 @@ git tag -a v0.1.0-field-alpha -m "SkyEar Field Alpha v0.1.0"
 git push origin v0.1.0-field-alpha
 ```
 
+Pushing the tag starts the GitHub Actions workflow `.github/workflows/field-alpha-release.yml`. The workflow builds:
+
+- `dist/skyear-0.1.0-py3-none-any.whl`
+- `dist/skyear-0.1.0.tar.gz`
+
+and uploads them to the GitHub Release named `v0.1.0-field-alpha`.
+
+`dist/` is ignored by Git on purpose, so local package files do not appear in the repository. They become visible on GitHub only after the tag workflow creates or updates the Release.
+
+If you need to create the release manually instead:
+
+```bash
+python -m pip install build
+python -m build
+gh release create v0.1.0-field-alpha dist/* \
+  --title "SkyEar v0.1.0-field-alpha" \
+  --notes "Field Alpha engineering dry-run release package. Passive warning and visual confirmation only."
+```
+
 ## Install From Tag
 
 Base install:
