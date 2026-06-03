@@ -179,6 +179,7 @@ def decision_score_values(event: dict) -> dict[str, float | None]:
 
 OPERATOR_LABEL_TEXT = {
     "background": "BACKGROUND",
+    "acoustic_harmonic_source": "ACOUSTIC HARMONIC SOURCE",
     "non_drone_harmonic": "NON-DRONE HARMONIC",
     "ml_drone_candidate": "ML DRONE CANDIDATE",
     "local_drone_candidate": "LOCAL DRONE CANDIDATE",
@@ -203,6 +204,8 @@ def decision_display_state(event: dict) -> dict[str, str]:
     label = operator_label(event)
     if label == "alert":
         return {"label": format_operator_label(label), "harmonic_color": "#dc2626", "ml_color": "#dc2626", "combined_color": "#dc2626"}
+    if label == "acoustic_harmonic_source":
+        return {"label": "ACOUSTIC HARMONIC SOURCE", "harmonic_color": "#ca8a04", "ml_color": "#6b7280", "combined_color": "#6b7280"}
     if label == "drone_like":
         return {"label": "DRONE-LIKE", "harmonic_color": "#dc2626", "ml_color": "#ea580c", "combined_color": "#dc2626"}
     if label == "strong_local_candidate":
@@ -235,6 +238,9 @@ def render_decision_bars(st_module, event: dict) -> None:
     strong_run = _int_value(event, "strong_run")
     delay = _raw_value(event, "estimated_detection_delay_sec")
     delay_text = "n/a" if delay is None else f"{float(delay):.1f}s"
+    hf_error = bool(_raw_value(event, "hf_error"))
+    if hf_error:
+        st_module.warning("HF unavailable — harmonic-only mode, alert disabled")
     st_module.markdown(
         f"""
 <div class="sky-score-box">

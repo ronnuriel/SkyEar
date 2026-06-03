@@ -28,6 +28,12 @@ class HFDetectionResult:
     error: Optional[str] = None
 
 
+def format_exception(exc: BaseException) -> str:
+    message = str(exc)
+    exc_type = type(exc).__name__
+    return f"{exc_type}: {message}" if message else exc_type
+
+
 class HFDetector:
     def __init__(
         self,
@@ -78,7 +84,7 @@ class HFDetector:
                 error=None,
             )
         except Exception as exc:
-            return HFDetectionResult(error=str(exc))
+            return HFDetectionResult(error=format_exception(exc))
 
     def _ensure_loaded(self) -> bool:
         if self._model is not None and self._extractor is not None:
@@ -96,7 +102,7 @@ class HFDetector:
             self._model.eval()
             return True
         except Exception as exc:
-            self._load_error = str(exc)
+            self._load_error = format_exception(exc)
             return False
 
     def _drone_probability(self, probs: np.ndarray, id2label: dict) -> float:

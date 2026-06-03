@@ -13,8 +13,10 @@ def _event(
     confidence: float = 0.45,
     harmonic_score: float = 18.0,
     hf_p_drone: float | None = 0.9,
+    hf_error: bool | None = None,
     best_f0_hz: int | None = 1000,
     channel_agreement_count: int = 1,
+    channel_count: int = 1,
     f0_stable: bool = False,
     harmonic_evidence_pct: float | None = None,
     ml_drone_pct: float | None = None,
@@ -40,6 +42,8 @@ def _event(
         "candidate_run": candidate_run,
         "ml_positive_run": ml_positive_run,
         "strong_run": strong_run,
+        "hf_error": hf_error,
+        "channel_count": channel_count,
     }
     if coverage_radius_m is not None:
         metadata["coverage_radius_m"] = coverage_radius_m
@@ -60,13 +64,14 @@ def _event(
         ml_drone_pct=ml_drone_pct,
         combined_drone_evidence_pct=combined_drone_evidence_pct,
         hf_p_drone=hf_p_drone,
+        hf_error=hf_error,
         operator_label=operator_label,
         candidate_run=candidate_run,
         ml_positive_run=ml_positive_run,
         strong_run=strong_run,
         calibrated=True,
         channel_agreement_count=channel_agreement_count,
-        channel_count=1,
+        channel_count=channel_count,
         metadata=metadata,
     )
 
@@ -361,6 +366,58 @@ def test_ml_only_without_harmonic_support_stays_level_1_max():
     alert = alert_level_from_recent_events(events)
 
     assert alert.level <= 1
+
+
+def test_hf_error_harmonic_alert_shape_is_not_level_1_without_ml_persistence():
+    alert = alert_level_from_recent_events(
+        [
+            _event(
+                "station_1",
+                status="alert",
+                confidence=0.95,
+                harmonic_score=30.0,
+                harmonic_evidence_pct=1.0,
+                hf_p_drone=None,
+                hf_error=True,
+                ml_drone_pct=None,
+                operator_label="acoustic_harmonic_source",
+                candidate_run=0,
+                channel_agreement_count=1,
+                channel_count=1,
+            )
+        ]
+    )
+
+    assert alert.level == 0
+
+
+def test_single_channel_agree_one_of_one_does_not_create_channel_bonus():
+    single = _event(
+        "station_1",
+        status="suspect",
+        confidence=0.2,
+        harmonic_score=18.0,
+        harmonic_evidence_pct=0.3,
+        hf_p_drone=0.95,
+        ml_drone_pct=0.95,
+        channel_agreement_count=1,
+        channel_count=1,
+    )
+    multi = _event(
+        "station_2",
+        status="suspect",
+        confidence=0.2,
+        harmonic_score=18.0,
+        harmonic_evidence_pct=0.3,
+        hf_p_drone=0.95,
+        ml_drone_pct=0.95,
+        channel_agreement_count=2,
+        channel_count=2,
+    )
+
+    from server.alert_logic import station_evidence_score
+
+    assert station_evidence_score(multi) > station_evidence_score(single)
 
 
 def test_single_window_candidate_contributes_weakly_below_level_1():

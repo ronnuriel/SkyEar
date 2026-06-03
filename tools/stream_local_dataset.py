@@ -161,7 +161,8 @@ def build_event(
     hf_result: Any = None,
     hf_p_drone: float | None = None,
 ) -> AcousticEvent:
-    frame = detector_state.update(audio, sample_rate, timestamp, hf_p_drone=hf_p_drone)
+    hf_error = bool(getattr(hf_result, "error", None))
+    frame = detector_state.update(audio, sample_rate, timestamp, hf_p_drone=hf_p_drone, hf_error=hf_error)
     mono = to_mono(audio)
     max_freq = detector_state.config.max_freq
     spectrum = compute_spectrum_summary(mono, sample_rate, max_freq=max_freq, n_points=300)
@@ -193,8 +194,10 @@ def build_event(
         ml_drone_pct_smoothed=frame.ml_drone_pct_smoothed,
         combined_drone_evidence_pct=frame.combined_drone_evidence_pct,
         hf_p_drone=hf_p_drone,
+        hf_error=frame.hf_error,
         hf_negative=frame.hf_negative,
         hf_positive=frame.hf_positive,
+        harmonic_activity_duration_sec=frame.harmonic_activity_duration_sec,
         decision_reason=frame.decision_reason,
         operator_label=frame.operator_label,
         candidate_run=frame.candidate_run,
@@ -234,8 +237,10 @@ def build_event(
             "ml_drone_pct": frame.ml_drone_pct,
             "ml_drone_pct_smoothed": frame.ml_drone_pct_smoothed,
             "combined_drone_evidence_pct": frame.combined_drone_evidence_pct,
+            "hf_error": frame.hf_error,
             "hf_negative": frame.hf_negative,
             "hf_positive": frame.hf_positive,
+            "harmonic_activity_duration_sec": frame.harmonic_activity_duration_sec,
             "decision_reason": frame.decision_reason,
             "operator_label": frame.operator_label,
             "candidate_run": frame.candidate_run,
@@ -244,7 +249,7 @@ def build_event(
             "estimated_detection_delay_sec": frame.estimated_detection_delay_sec,
             "hf_label": getattr(hf_result, "label", None),
             "hf_class_probs": getattr(hf_result, "class_probs", {}) if hf_result is not None else {},
-            "hf_error": getattr(hf_result, "error", None),
+            "hf_error_detail": getattr(hf_result, "error", None),
             **spectrum,
             **spectrogram,
             "harmonic_lines": harmonic_lines,
@@ -262,9 +267,25 @@ def apply_local_eval_guards(event: AcousticEvent) -> AcousticEvent:
         ml = metadata.get("ml_drone_pct")
     ml = None if ml is None else float(ml)
     hf_negative = event.hf_p_drone is not None and float(event.hf_p_drone) < 0.20
+    hf_unavailable = bool(event.hf_error or metadata.get("hf_error")) or event.hf_p_drone is None
     status = event.status.value if hasattr(event.status, "value") else str(event.status)
     operator_label = event.operator_label or metadata.get("operator_label") or "background"
     candidate_run = int(event.candidate_run or metadata.get("candidate_run") or 0)
+
+    if hf_unavailable and candidate_run == 0 and status in {"alert", "drone_like"}:
+        if max(harmonic, raw_harmonic) > 0.0:
+            status = "suspect"
+            operator_label = "acoustic_harmonic_source"
+            reason = "HF unavailable — harmonic-only mode, alert disabled"
+        else:
+            status = "background"
+            operator_label = "background"
+            reason = "HF unavailable — harmonic-only mode, alert disabled"
+        event.status = EventStatus(status)
+        event.operator_label = operator_label
+        event.decision_reason = reason
+        metadata["operator_label"] = operator_label
+        metadata["decision_reason"] = reason
 
     if hf_negative and combined < 0.30 and status in {"alert", "drone_like"}:
         if max(harmonic, raw_harmonic) >= 0.45:
@@ -312,8 +333,10 @@ REPORT_FIELDNAMES = [
     "ml_drone_pct",
     "ml_drone_pct_smoothed",
     "hf_p_drone",
+    "hf_error",
     "hf_negative",
     "hf_positive",
+    "harmonic_activity_duration_sec",
     "harmonic_score",
     "harmonic_score_smoothed",
     "harmonic_evidence_pct",
@@ -365,8 +388,10 @@ def _report_rows(events: list[AcousticEvent]) -> Iterator[dict[str, Any]]:
             "ml_drone_pct": _metadata_or_event(event, metadata, "ml_drone_pct"),
             "ml_drone_pct_smoothed": _metadata_or_event(event, metadata, "ml_drone_pct_smoothed"),
             "hf_p_drone": event.hf_p_drone,
+            "hf_error": _metadata_or_event(event, metadata, "hf_error"),
             "hf_negative": _metadata_or_event(event, metadata, "hf_negative"),
             "hf_positive": _metadata_or_event(event, metadata, "hf_positive"),
+            "harmonic_activity_duration_sec": _metadata_or_event(event, metadata, "harmonic_activity_duration_sec"),
             "harmonic_score": event.harmonic_score,
             "harmonic_score_smoothed": _metadata_or_event(event, metadata, "harmonic_score_smoothed"),
             "harmonic_evidence_pct": _metadata_or_event(event, metadata, "harmonic_evidence_pct"),

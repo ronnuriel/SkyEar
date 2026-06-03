@@ -66,16 +66,18 @@ def test_after_calibration_quiet_audio_becomes_background():
     assert frame.calibrated is True
 
 
-def test_harmonic_stack_triggers_alert_only_after_min_duration():
+def test_single_channel_harmonic_only_stays_suspect_without_ml():
     state = _calibrated_state()
 
     first = state.update(_harmonic(), SR, 3.0)
     second = state.update(_harmonic(), SR, 5.0)
     third = state.update(_harmonic(), SR, 6.1)
 
-    assert first.status in {"suspect", "drone_like"}
-    assert second.status in {"suspect", "drone_like"}
-    assert third.status == "alert"
+    assert first.status == "suspect"
+    assert second.status == "suspect"
+    assert third.status == "suspect"
+    assert third.operator_label == "acoustic_harmonic_source"
+    assert third.harmonic_activity_duration_sec > 0.0
 
 
 def test_signal_clears_to_background_after_clean_windows():
@@ -87,7 +89,7 @@ def test_signal_clears_to_background_after_clean_windows():
     holding = state.update(_quiet(), SR, 7.0)
     cleared = state.update(_quiet(), SR, 10.0)
 
-    assert holding.status == "alert"
+    assert holding.status == "suspect"
     assert cleared.status == "background"
 
 
@@ -138,6 +140,43 @@ def test_hf_negative_caps_single_channel_even_when_f0_stable():
     assert frame.f0_stable is True
     assert frame.hf_negative is True
     assert frame.status == "suspect"
+
+
+def test_single_channel_harmonic_high_duration_with_hf_error_never_alerts():
+    state = _calibrated_state()
+
+    state.update(_harmonic(), SR, 3.0, hf_error=True)
+    state.update(_harmonic(), SR, 4.5, hf_error=True)
+    frame = state.update(_harmonic(), SR, 6.1, hf_error=True)
+
+    assert frame.hf_error is True
+    assert frame.channel_count == 1
+    assert frame.agreement_count == 1
+    assert frame.status == "suspect"
+    assert frame.operator_label == "acoustic_harmonic_source"
+    assert frame.decision_reason == "HF unavailable — harmonic-only mode, alert disabled"
+
+
+def test_agree_one_of_one_does_not_count_as_multichannel_agreement():
+    state = _calibrated_state()
+
+    frame = state.update(_harmonic(), SR, 3.0, hf_error=True)
+
+    assert frame.channel_count == 1
+    assert frame.agreement_count == 1
+    assert frame.status != "alert"
+
+
+def test_alert_cannot_happen_with_candidate_run_zero():
+    state = _calibrated_state()
+
+    state.update(_harmonic(), SR, 3.0)
+    state.update(_harmonic(), SR, 4.5)
+    frame = state.update(_harmonic(), SR, 6.1)
+
+    assert frame.candidate_run == 0
+    assert frame.status != "alert"
+    assert frame.status != "drone_like"
 
 
 def test_hf_positive_with_high_harmonic_can_reach_alert_after_duration():
@@ -322,27 +361,40 @@ def test_hf_missing_single_channel_keeps_existing_harmonic_behavior():
     assert frame.f0_stable is True
     assert frame.hf_negative is False
     assert frame.hf_positive is False
-    assert frame.status in {"suspect", "drone_like", "alert"}
+    assert frame.status == "suspect"
+    assert frame.operator_label == "acoustic_harmonic_source"
 
 
 def test_multichannel_agreement_and_stable_f0_can_alert_without_hf():
     state = _calibrated_state()
 
-    state.update(_harmonic(channels=2), SR, 3.0)
-    state.update(_harmonic(channels=2), SR, 4.5)
-    frame = state.update(_harmonic(channels=2), SR, 6.1)
+    state.update(_harmonic(channels=4), SR, 3.0)
+    state.update(_harmonic(channels=4), SR, 4.5)
+    frame = state.update(_harmonic(channels=4), SR, 6.1)
 
     assert frame.agreement_count >= 2
     assert frame.f0_stable is True
     assert frame.status == "alert"
 
 
+def test_two_channel_harmonic_only_does_not_use_multichannel_alert_path():
+    state = _calibrated_state()
+
+    state.update(_harmonic(channels=2), SR, 3.0)
+    state.update(_harmonic(channels=2), SR, 4.5)
+    frame = state.update(_harmonic(channels=2), SR, 6.1)
+
+    assert frame.channel_count == 2
+    assert frame.agreement_count >= 2
+    assert frame.status != "alert"
+
+
 def test_multichannel_agreement_and_stable_f0_can_alert_despite_negative_hf():
     state = _calibrated_state()
 
-    state.update(_harmonic(channels=2), SR, 3.0, hf_p_drone=0.001)
-    state.update(_harmonic(channels=2), SR, 4.5, hf_p_drone=0.001)
-    frame = state.update(_harmonic(channels=2), SR, 6.1, hf_p_drone=0.001)
+    state.update(_harmonic(channels=4), SR, 3.0, hf_p_drone=0.001)
+    state.update(_harmonic(channels=4), SR, 4.5, hf_p_drone=0.001)
+    frame = state.update(_harmonic(channels=4), SR, 6.1, hf_p_drone=0.001)
 
     assert frame.hf_negative is True
     assert frame.agreement_count >= 2

@@ -48,7 +48,8 @@ def test_stable_harmonic_f0_allows_alert_after_duration():
     frame = state.update(_harmonic(900), SR, 5.2)
 
     assert frame.f0_stable is True
-    assert frame.status == "alert"
+    assert frame.status == "suspect"
+    assert frame.operator_label == "acoustic_harmonic_source"
 
 
 def test_changing_f0_stays_below_alert_quickly():

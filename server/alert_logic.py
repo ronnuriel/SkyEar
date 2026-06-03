@@ -87,9 +87,29 @@ def _hf_negative(event: AcousticEvent) -> bool:
     return event.hf_p_drone is not None and float(event.hf_p_drone) < 0.20
 
 
+def _hf_error(event: AcousticEvent) -> bool:
+    metadata = event.metadata or {}
+    if event.hf_error is not None:
+        return bool(event.hf_error)
+    return bool(metadata.get("hf_error"))
+
+
+def _ml_unavailable(event: AcousticEvent) -> bool:
+    return (
+        _hf_error(event)
+        or (event.hf_p_drone is None and event.ml_drone_pct is None and event.ml_drone_pct_smoothed is None)
+    )
+
+
 def _strong_multichannel_evidence(event: AcousticEvent) -> bool:
     metadata = event.metadata or {}
-    return int(event.channel_agreement_count or 0) >= 2 and bool(metadata.get("f0_stable"))
+    channel_count = int(event.channel_count or metadata.get("channel_count") or 0)
+    agreement = int(event.channel_agreement_count or 0)
+    return (
+        channel_count >= 4
+        and agreement >= max(2, math.ceil(channel_count * 0.5))
+        and bool(metadata.get("f0_stable") or event.f0_family_stable)
+    )
 
 
 def station_evidence_score(event: AcousticEvent) -> float:
@@ -97,6 +117,7 @@ def station_evidence_score(event: AcousticEvent) -> float:
     suspect_threshold, alert_threshold = _thresholds(event)
     candidate_run = _int_metric(event, "candidate_run")
     strong_run = _int_metric(event, "strong_run")
+    hf_unavailable = _ml_unavailable(event)
     if status in BACKGROUND_STATUSES and candidate_run <= 0 and not _is_near_threshold_background(event, suspect_threshold):
         return 0.0
 
@@ -128,10 +149,12 @@ def station_evidence_score(event: AcousticEvent) -> float:
     metadata = event.metadata or {}
     if bool(metadata.get("f0_stable")):
         score += 0.10
-    if int(event.channel_agreement_count or 0) >= 2:
+    if int(event.channel_count or metadata.get("channel_count") or 0) >= 2 and int(event.channel_agreement_count or 0) >= 2:
         score += 0.10
     if _hf_negative(event) and not _strong_multichannel_evidence(event):
         score *= 0.40
+    if hf_unavailable and candidate_run == 0 and not _strong_multichannel_evidence(event):
+        score = min(score, 0.45)
     if candidate_run == 1 and hf >= 0.90 and status != "alert":
         score = min(score, 0.59)
 
@@ -241,7 +264,7 @@ def alert_level_from_recent_events(events: list[AcousticEvent], window_sec: floa
     confirming_active = [
         (event, score)
         for event, score in active
-        if not _hf_negative(event) or _strong_multichannel_evidence(event) or same_source_f0
+        if (not _hf_negative(event) and not _ml_unavailable(event)) or _strong_multichannel_evidence(event) or same_source_f0
     ]
     confirming_events = [event for event, _ in confirming_active]
 

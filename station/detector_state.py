@@ -82,6 +82,8 @@ class StationDetectionFrame:
     combined_drone_evidence_pct: float = 0.0
     hf_negative: bool = False
     hf_positive: bool = False
+    hf_error: bool = False
+    harmonic_activity_duration_sec: float = 0.0
     decision_reason: str = "no acoustic evidence"
     operator_label: str = "background"
     candidate_run: int = 0
@@ -153,6 +155,7 @@ class StationDetectorState:
         timestamp: float,
         hf_p_drone: Optional[float] = None,
         cnn_p_drone: Optional[float] = None,
+        hf_error: bool = False,
     ) -> StationDetectionFrame:
         channels = _as_samples_by_channels(audio)
         mono = channels.mean(axis=1)
@@ -229,6 +232,7 @@ class StationDetectorState:
         hf_available = hf_p_drone is not None
         hf_positive = hf_available and float(hf_p_drone) >= self.config.advisory_threshold
         hf_negative = hf_available and float(hf_p_drone) < self.config.hf_negative_threshold
+        ml_unavailable = bool(hf_error) or ml_drone_pct_smoothed is None
         ml_candidate_persistent = self._ml_candidate_persistent()
         strong_local_candidate = self._strong_local_candidate_persistent()
         ml_drone_like_persistent = self._ml_drone_like_persistent(
@@ -240,20 +244,38 @@ class StationDetectorState:
         strong_run = candidate_run if strong_local_candidate else self._current_true_run(self.strong_candidate_history)
         estimated_detection_delay_sec = self._current_run_elapsed_sec(self.ml_strong_history)
         advisory_support = hf_positive or float(cnn_p_drone or 0.0) >= self.config.advisory_threshold
-        strong_channel_agreement = agreement_count >= 2
+        meaningful_channel_agreement = channels.shape[1] >= 2 and agreement_count >= 2
+        strong_channel_agreement = (
+            channels.shape[1] >= 4
+            and agreement_count >= max(2, int(np.ceil(channels.shape[1] * 0.5)))
+        )
         single_channel = channels.shape[1] == 1
         multi_channel = channels.shape[1] > 1
         negative_hf_veto = self.config.hf_negative_caps_status and hf_negative
         strong_multichannel_evidence = multi_channel and strong_channel_agreement and f0_family_stable
 
         if single_channel:
-            alert_ready = f0_family_stable and not negative_hf_veto
-            if self.config.hf_required_for_single_channel_alert and hf_available:
-                alert_ready = alert_ready and hf_positive
-            drone_like_ready = not negative_hf_veto and (hf_positive or f0_family_stable)
+            alert_ready = (
+                not ml_unavailable
+                and not negative_hf_veto
+                and ml_drone_pct_smoothed is not None
+                and float(ml_drone_pct_smoothed) >= self.config.ml_strong_threshold
+                and candidate_run >= 3
+                and combined_drone_evidence_pct >= 0.75
+                and (f0_family_stable or f0_stable)
+            )
+            drone_like_ready = not ml_unavailable and not negative_hf_veto and ml_drone_like_persistent
         else:
-            alert_ready = strong_channel_agreement or f0_family_stable
-            drone_like_ready = advisory_support or f0_family_stable or strong_channel_agreement
+            alert_ready = strong_multichannel_evidence or (
+                not ml_unavailable
+                and combined_drone_evidence_pct >= 0.75
+                and candidate_run >= 3
+                and (f0_family_stable or f0_stable)
+            )
+            drone_like_ready = (
+                (not ml_unavailable and (advisory_support or ml_drone_like_persistent))
+                or strong_multichannel_evidence
+            )
             if negative_hf_veto:
                 alert_ready = strong_multichannel_evidence
                 drone_like_ready = strong_multichannel_evidence
@@ -289,11 +311,19 @@ class StationDetectorState:
             elif self.config.ml_spike_single_window_caps_to_candidate:
                 status = "suspect"
                 self._last_active_status = status
+        if (
+            status in {"alert", "drone_like"}
+            and not strong_multichannel_evidence
+            and (ml_unavailable or candidate_run == 0)
+        ):
+            status = "suspect" if has_suspect_harmonic or decision_harmonic_pct > 0.0 else "background"
+            self._last_active_status = status if status != "background" else None
         operator_label = self._operator_label(
             status=status,
             harmonic_evidence_pct=decision_harmonic_pct,
             combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_negative=hf_negative,
+            ml_unavailable=ml_unavailable,
             ml_strong=ml_strong,
             ml_candidate_persistent=ml_candidate_persistent,
             strong_local_candidate=strong_local_candidate,
@@ -307,10 +337,12 @@ class StationDetectorState:
             ml_drone_pct=ml_drone_pct_smoothed,
             combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_p_drone=hf_p_drone,
+            hf_error=bool(hf_error),
             channel_count=channels.shape[1],
             agreement_count=agreement_count,
             f0_family_stable=f0_family_stable,
             ml_drone_like_persistent=ml_drone_like_persistent,
+            candidate_run=candidate_run,
         )
         decision_reason = self._decision_reason(
             status=status,
@@ -319,15 +351,23 @@ class StationDetectorState:
             combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_negative=hf_negative,
             hf_positive=hf_positive,
+            ml_unavailable=ml_unavailable,
             ml_strong=ml_strong,
-            strong_channel_agreement=strong_channel_agreement,
+            strong_channel_agreement=meaningful_channel_agreement,
             f0_stable=f0_family_stable,
         )
         self._status_history.append(status)
         self._trim_history(self._status_history)
         self.operator_state_history.append(operator_label)
         self._trim_history(self.operator_state_history)
-        confidence = self._confidence(evidence_score, has_suspect_harmonic, hf_p_drone, cnn_p_drone, agreement_count)
+        confidence = self._confidence(
+            evidence_score,
+            has_suspect_harmonic,
+            hf_p_drone,
+            cnn_p_drone,
+            agreement_count,
+            channels.shape[1],
+        )
 
         return self._frame(
             status=status,
@@ -351,6 +391,8 @@ class StationDetectorState:
             combined_drone_evidence_pct=combined_drone_evidence_pct,
             hf_negative=hf_negative,
             hf_positive=hf_positive,
+            hf_error=bool(hf_error),
+            harmonic_activity_duration_sec=duration if has_suspect_harmonic else 0.0,
             decision_reason=decision_reason,
             operator_label=operator_label,
             candidate_run=candidate_run,
@@ -673,11 +715,14 @@ class StationDetectorState:
         combined_drone_evidence_pct: float,
         hf_negative: bool,
         hf_positive: bool,
+        ml_unavailable: bool,
         ml_strong: bool,
         strong_channel_agreement: bool,
         f0_stable: bool,
     ) -> str:
         high_harmonic = harmonic_evidence_pct >= 0.75
+        if ml_unavailable and harmonic_evidence_pct > 0.0:
+            return "HF unavailable — harmonic-only mode, alert disabled"
         if hf_negative and high_harmonic:
             return "harmonic source detected, but ML strongly rejects drone"
         if combined_drone_evidence_pct >= 0.75:
@@ -704,6 +749,7 @@ class StationDetectorState:
         harmonic_evidence_pct: float,
         combined_drone_evidence_pct: float,
         hf_negative: bool,
+        ml_unavailable: bool,
         ml_strong: bool,
         ml_candidate_persistent: bool,
         strong_local_candidate: bool,
@@ -711,6 +757,8 @@ class StationDetectorState:
     ) -> str:
         if status == "alert":
             return "alert"
+        if ml_unavailable and harmonic_evidence_pct > 0.0:
+            return "acoustic_harmonic_source"
         if hf_negative and harmonic_evidence_pct >= 0.75:
             return "non_drone_harmonic"
         if status == "drone_like":
@@ -737,17 +785,35 @@ class StationDetectorState:
         channel_count: int,
         agreement_count: int,
         f0_family_stable: bool,
+        hf_error: bool = False,
         ml_drone_like_persistent: bool = True,
+        candidate_run: int = 0,
     ) -> tuple[str, str]:
-        strong_multichannel_evidence = channel_count > 1 and agreement_count >= 2 and f0_family_stable
+        strong_multichannel_evidence = (
+            channel_count >= 4
+            and agreement_count >= max(2, int(np.ceil(channel_count * 0.5)))
+            and f0_family_stable
+        )
         hf_negative = hf_p_drone is not None and float(hf_p_drone) < self.config.hf_negative_threshold
+        ml_unavailable = bool(hf_error) or ml_drone_pct is None
         ml_low = ml_drone_pct is not None and float(ml_drone_pct) < self.config.advisory_threshold
 
         if operator_label == "background" and status in {"drone_like", "alert"}:
             status = "suspect" if has_suspect_harmonic else "background"
 
-        if operator_label == "non_drone_harmonic" and status in {"drone_like", "alert"}:
+        if operator_label in {"non_drone_harmonic", "acoustic_harmonic_source"} and status in {"drone_like", "alert"}:
             status = "suspect"
+
+        if (
+            status in {"drone_like", "alert"}
+            and not strong_multichannel_evidence
+            and (ml_unavailable or candidate_run == 0)
+        ):
+            status = "suspect" if harmonic_evidence_pct > 0.0 or has_suspect_harmonic else "background"
+            if ml_unavailable and (harmonic_evidence_pct > 0.0 or has_suspect_harmonic):
+                operator_label = "acoustic_harmonic_source"
+            elif ml_unavailable:
+                operator_label = "background"
 
         if (
             channel_count == 1
@@ -821,12 +887,13 @@ class StationDetectorState:
         hf_p_drone: Optional[float],
         cnn_p_drone: Optional[float],
         agreement_count: int,
+        channel_count: int = 1,
     ) -> float:
         confidence = _sigmoid_score(evidence_score, self.suspect_threshold)
         if has_suspect_harmonic:
             support = max(float(hf_p_drone or 0.0), float(cnn_p_drone or 0.0))
             confidence = min(1.0, confidence + 0.15 * support)
-            if agreement_count >= 2:
+            if channel_count >= 2 and agreement_count >= 2:
                 confidence = min(1.0, confidence + 0.08)
         return float(confidence)
 
@@ -853,6 +920,8 @@ class StationDetectorState:
         combined_drone_evidence_pct: float = 0.0,
         hf_negative: bool = False,
         hf_positive: bool = False,
+        hf_error: bool = False,
+        harmonic_activity_duration_sec: float = 0.0,
         decision_reason: str = "no acoustic evidence",
         operator_label: str = "background",
         candidate_run: int = 0,
@@ -893,6 +962,8 @@ class StationDetectorState:
             combined_drone_evidence_pct=float(np.clip(combined_drone_evidence_pct, 0.0, 1.0)),
             hf_negative=bool(hf_negative),
             hf_positive=bool(hf_positive),
+            hf_error=bool(hf_error),
+            harmonic_activity_duration_sec=float(max(0.0, harmonic_activity_duration_sec)),
             decision_reason=str(decision_reason),
             operator_label=str(operator_label),
             candidate_run=int(candidate_run),

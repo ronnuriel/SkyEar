@@ -43,8 +43,10 @@ class AcousticEvent(BaseModel):
     combined_drone_evidence_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     hf_p_drone: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     cnn_p_drone: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    hf_error: Optional[bool] = None
     hf_negative: Optional[bool] = None
     hf_positive: Optional[bool] = None
+    harmonic_activity_duration_sec: Optional[float] = Field(default=None, ge=0.0)
     decision_reason: Optional[str] = None
     operator_label: Optional[str] = None
     candidate_run: Optional[int] = Field(default=None, ge=0)

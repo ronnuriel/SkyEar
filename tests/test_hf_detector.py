@@ -46,6 +46,23 @@ def test_hf_detector_transformers_missing_fails_gracefully(monkeypatch):
     assert result.class_probs == {}
 
 
+def test_hf_detector_inference_error_includes_exception_type(monkeypatch):
+    detector = HFDetector("example/model")
+
+    def fake_loaded():
+        return True
+
+    def fake_extract(*args, **kwargs):
+        raise ValueError("feature extraction failed")
+
+    monkeypatch.setattr(detector, "_ensure_loaded", fake_loaded)
+    detector._extractor = fake_extract
+
+    result = detector.predict(np.zeros(16000, dtype=np.float32), 16000)
+
+    assert result.error == "ValueError: feature extraction failed"
+
+
 def test_hf_detection_result_has_expected_fields():
     result = HFDetectionResult()
 

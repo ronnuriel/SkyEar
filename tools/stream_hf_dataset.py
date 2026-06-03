@@ -83,12 +83,14 @@ def format_detection_log(prefix: str, event: AcousticEvent) -> str:
     if f0_family_stable is None:
         f0_family_stable = metadata.get("f0_family_stable")
     reason = event.decision_reason or metadata.get("decision_reason") or ""
+    hf_error = bool(event.hf_error if event.hf_error is not None else metadata.get("hf_error"))
+    hf_note = " HF unavailable — harmonic-only mode, alert disabled" if hf_error else ""
     return (
         f"{prefix} {event.status} label={operator_label} hf={_num(event.hf_p_drone, 3)} "
         f"harm={_num(event.harmonic_score)}/{_num(harmonic_smoothed)} "
         f"h={_pct(harmonic_raw_pct)}/{_pct(harmonic_smoothed_pct)} "
         f"combined={_pct(combined)} f0={event.best_f0_hz} canon={canonical_f0} "
-        f"stable={bool(f0_family_stable)} reason=\"{reason}\""
+        f"stable={bool(f0_family_stable)} reason=\"{reason}\"{hf_note}"
     )
 
 
@@ -217,7 +219,8 @@ def build_event(
     hf_p_drone: float | None = None,
     file_metadata: dict[str, Any] | None = None,
 ) -> AcousticEvent:
-    frame = detector_state.update(audio, sample_rate, timestamp, hf_p_drone=hf_p_drone)
+    hf_error = bool(getattr(hf_result, "error", None))
+    frame = detector_state.update(audio, sample_rate, timestamp, hf_p_drone=hf_p_drone, hf_error=hf_error)
     mono = to_mono(audio)
     max_freq = detector_state.config.max_freq
     spectrum = compute_spectrum_summary(mono, sample_rate, max_freq=max_freq, n_points=300)
@@ -250,8 +253,10 @@ def build_event(
         ml_drone_pct_smoothed=frame.ml_drone_pct_smoothed,
         combined_drone_evidence_pct=frame.combined_drone_evidence_pct,
         hf_p_drone=hf_p_drone,
+        hf_error=frame.hf_error,
         hf_negative=frame.hf_negative,
         hf_positive=frame.hf_positive,
+        harmonic_activity_duration_sec=frame.harmonic_activity_duration_sec,
         decision_reason=frame.decision_reason,
         operator_label=frame.operator_label,
         candidate_run=frame.candidate_run,
@@ -291,8 +296,10 @@ def build_event(
             "ml_drone_pct": frame.ml_drone_pct,
             "ml_drone_pct_smoothed": frame.ml_drone_pct_smoothed,
             "combined_drone_evidence_pct": frame.combined_drone_evidence_pct,
+            "hf_error": frame.hf_error,
             "hf_negative": frame.hf_negative,
             "hf_positive": frame.hf_positive,
+            "harmonic_activity_duration_sec": frame.harmonic_activity_duration_sec,
             "decision_reason": frame.decision_reason,
             "operator_label": frame.operator_label,
             "candidate_run": frame.candidate_run,
@@ -301,7 +308,7 @@ def build_event(
             "estimated_detection_delay_sec": frame.estimated_detection_delay_sec,
             "hf_label": getattr(hf_result, "label", None),
             "hf_class_probs": getattr(hf_result, "class_probs", {}) if hf_result is not None else {},
-            "hf_error": getattr(hf_result, "error", None),
+            "hf_error_detail": getattr(hf_result, "error", None),
             **file_metadata,
             **spectrum,
             **spectrogram,

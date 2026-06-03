@@ -76,6 +76,12 @@ def test_decision_display_labels_non_drone_harmonic():
     assert state["label"] == "NON-DRONE HARMONIC"
 
 
+def test_decision_display_labels_acoustic_harmonic_source():
+    state = decision_display_state({"operator_label": "acoustic_harmonic_source"})
+
+    assert state["label"] == "ACOUSTIC HARMONIC SOURCE"
+
+
 def test_decision_display_uses_operator_label_for_ml_candidate():
     state = decision_display_state(
         {

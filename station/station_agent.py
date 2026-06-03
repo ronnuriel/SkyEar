@@ -10,10 +10,24 @@ from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHea
 from station.audio_capture import audio_blocks, list_input_devices, to_mono
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
-from station.hf_detector import HFDetector
+from station.hf_detector import DEFAULT_MODEL_ID, HFDetector
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
 DETECTOR_VERSION = "station-detector-state-v1"
+
+
+class HFErrorReporter:
+    def __init__(self):
+        self._printed: set[str] = set()
+
+    def log_once(self, error_message: str | None) -> bool:
+        if not error_message:
+            return False
+        if error_message in self._printed:
+            return False
+        print(f"HF error: {error_message}")
+        self._printed.add(error_message)
+        return True
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
@@ -81,10 +95,43 @@ def _audio_device_label(audio_cfg: dict[str, Any]) -> str | None:
         return f"id={audio_cfg['device_id']}"
     return None
 
+
+def _build_hf_detector(hf_cfg: dict[str, Any]) -> HFDetector:
+    return HFDetector(
+        model_id=str(hf_cfg.get("model_id") or DEFAULT_MODEL_ID),
+        fallback_drone_label_idx=int(hf_cfg.get("fallback_drone_label_idx", 1)),
+        threshold=float(hf_cfg.get("threshold", 0.70)),
+    )
+
+
+def run_hf_smoke_test(cfg: dict[str, Any]) -> int:
+    audio_cfg = cfg["audio"]
+    hf_cfg = cfg.get("hf", {})
+    detector = _build_hf_detector(hf_cfg)
+    print("Capturing 1.0s audio for HF smoke test...")
+    audio = next(
+        audio_blocks(
+            device_id=audio_cfg.get("device_id"),
+            sample_rate=int(audio_cfg["sample_rate"]),
+            channels=int(audio_cfg["channels"]),
+            window_sec=1.0,
+        )
+    )
+    mono = to_mono(audio)
+    result = detector.predict(mono, int(audio_cfg["sample_rate"]))
+    print(f"model loaded: {'yes' if detector.model_loaded else 'no'}")
+    if result.error:
+        print(f"HF error: {result.error}")
+        return 1
+    print(f"p_drone: {result.p_drone}")
+    print(f"label: {result.label}")
+    return 0
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config_station.yaml")
     parser.add_argument("--list-devices", action="store_true")
+    parser.add_argument("--hf-smoke-test", action="store_true")
     args = parser.parse_args()
 
     if args.list_devices:
@@ -93,6 +140,9 @@ def main():
         return
 
     cfg = load_yaml(args.config)
+    if args.hf_smoke_test:
+        raise SystemExit(run_hf_smoke_test(cfg))
+
     station_cfg, audio_cfg = cfg["station"], cfg["audio"]
     det_cfg, dir_cfg, server_cfg = cfg["detector"], cfg["direction"], cfg["server"]
     mic_cfg = cfg.get("mic_array", {})
@@ -104,11 +154,8 @@ def main():
     detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg))
     hf_detector = None
     if bool(hf_cfg.get("enabled", False)):
-        hf_detector = HFDetector(
-            model_id=str(hf_cfg.get("model_id")),
-            fallback_drone_label_idx=int(hf_cfg.get("fallback_drone_label_idx", 1)),
-            threshold=float(hf_cfg.get("threshold", 0.70)),
-        )
+        hf_detector = _build_hf_detector(hf_cfg)
+    hf_error_reporter = HFErrorReporter()
     hf_run_every = max(1, int(hf_cfg.get("run_every_n_windows", 2)))
     window_index = 0
     last_hf_result = None
@@ -137,7 +184,10 @@ def main():
         if hf_detector is not None and window_index % hf_run_every == 0:
             last_hf_result = hf_detector.predict(mono, sample_rate)
         hf_p_drone = last_hf_result.p_drone if last_hf_result is not None else None
-        frame = detector_state.update(audio, sample_rate, now, hf_p_drone=hf_p_drone)
+        hf_error_message = last_hf_result.error if last_hf_result is not None else None
+        hf_error = bool(hf_error_message)
+        hf_error_reporter.log_once(hf_error_message)
+        frame = detector_state.update(audio, sample_rate, now, hf_p_drone=hf_p_drone, hf_error=hf_error)
         window_index += 1
         max_freq = int(det_cfg.get("max_freq", 7000))
         spectrum = compute_spectrum_summary(
@@ -190,8 +240,10 @@ def main():
             ml_drone_pct_smoothed=frame.ml_drone_pct_smoothed,
             combined_drone_evidence_pct=frame.combined_drone_evidence_pct,
             hf_p_drone=hf_p_drone,
+            hf_error=frame.hf_error,
             hf_negative=frame.hf_negative,
             hf_positive=frame.hf_positive,
+            harmonic_activity_duration_sec=frame.harmonic_activity_duration_sec,
             decision_reason=frame.decision_reason,
             operator_label=frame.operator_label,
             candidate_run=frame.candidate_run,
@@ -229,8 +281,10 @@ def main():
                 "ml_drone_pct": frame.ml_drone_pct,
                 "ml_drone_pct_smoothed": frame.ml_drone_pct_smoothed,
                 "combined_drone_evidence_pct": frame.combined_drone_evidence_pct,
+                "hf_error": frame.hf_error,
                 "hf_negative": frame.hf_negative,
                 "hf_positive": frame.hf_positive,
+                "harmonic_activity_duration_sec": frame.harmonic_activity_duration_sec,
                 "decision_reason": frame.decision_reason,
                 "operator_label": frame.operator_label,
                 "candidate_run": frame.candidate_run,
@@ -239,7 +293,7 @@ def main():
                 "estimated_detection_delay_sec": frame.estimated_detection_delay_sec,
                 "hf_label": last_hf_result.label if last_hf_result is not None else None,
                 "hf_class_probs": last_hf_result.class_probs if last_hf_result is not None else {},
-                "hf_error": last_hf_result.error if last_hf_result is not None else None,
+                "hf_error_message": hf_error_message,
                 **spectrum,
                 **spectrogram,
                 "harmonic_lines": harmonic_lines,
@@ -247,8 +301,8 @@ def main():
         )
 
         hf_label = last_hf_result.label if last_hf_result is not None else None
-        hf_error = bool(last_hf_result and last_hf_result.error)
         hf_display = f"{hf_p_drone:.2f}" if hf_p_drone is not None else "None"
+        hf_mode_note = " HF unavailable — harmonic-only mode, alert disabled" if hf_error else ""
         print(
             f"{time.strftime('%H:%M:%S')} {event.status:11s} "
             f"conf={event.confidence:.2f} harm={event.harmonic_score:.1f} "
@@ -258,7 +312,7 @@ def main():
             f"rms={event.rms:.4f} dur={event.duration_sec:.1f} "
             f"cand={frame.candidate_run} mlrun={frame.ml_positive_run} strong={frame.strong_run} "
             f"agree={event.channel_agreement_count}/{event.channel_count} "
-            f"az={event.estimated_azimuth_deg}"
+            f"az={event.estimated_azimuth_deg}{hf_mode_note}"
         )
 
         if now - last_send >= float(server_cfg["send_interval_sec"]):
@@ -275,7 +329,7 @@ def main():
                 station_id=station_cfg["station_id"],
                 station_name=station_cfg.get("name"),
                 timestamp_unix=now,
-                status="error" if last_error else "online",
+                status="error" if (last_error or hf_error_message) else "online",
                 station_location=event.station_location,
                 audio_device=_audio_device_label(audio_cfg),
                 sample_rate=sample_rate,
@@ -286,12 +340,13 @@ def main():
                 last_event_status=event.status.value if hasattr(event.status, "value") else str(event.status),
                 last_harmonic_score=event.harmonic_score,
                 last_hf_p_drone=event.hf_p_drone,
-                last_error=last_error,
-                errors=[last_error] if last_error else [],
+                last_error=last_error or hf_error_message,
+                errors=[error for error in [last_error, hf_error_message] if error],
                 metadata={
                     "mic_profile": mic_cfg.get("profile"),
                     "mic_sync_mode": mic_cfg.get("sync_mode"),
                     "window_index": window_index,
+                    "hf_error_message": hf_error_message,
                 },
             )
             try:
