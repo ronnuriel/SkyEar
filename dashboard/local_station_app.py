@@ -210,12 +210,13 @@ def main() -> None:
     cols[4].metric("RMS", f"{float(event.get('rms') or 0.0):.5f}")
     cols[5].metric("Candidate run", _event_value(event, "candidate_run") or 0)
 
-    beam_cols = st.columns(5)
+    beam_cols = st.columns(6)
     beam_cols[0].metric("Bearing", beam.get("estimated_azimuth_deg") if beam.get("estimated_azimuth_deg") is not None else "n/a")
     beam_cols[1].metric("Beam score", f"{float(beam.get('beam_score') or 0.0):.3f}" if beam.get("beam_score") is not None else "n/a")
-    beam_cols[2].metric("Beam SNR", f"{float(beam.get('beam_snr_gain_db') or 0.0):.1f} dB" if beam.get("beam_snr_gain_db") is not None else "n/a")
-    beam_cols[3].metric("Bearing stable", "yes" if beam.get("bearing_stable") else "no")
-    beam_cols[4].metric("Server", "send failed" if server.get("last_send_error") else "ok")
+    beam_cols[2].metric("Beam confidence", _metric_pct(beam.get("beam_confidence_pct")))
+    beam_cols[3].metric("Beam SNR", f"{float(beam.get('beam_snr_gain_db') or 0.0):.1f} dB" if beam.get("beam_snr_gain_db") is not None else "n/a")
+    beam_cols[4].metric("Bearing stable", "yes" if beam.get("bearing_stable") else "no")
+    beam_cols[5].metric("Server", "send failed" if server.get("last_send_error") else "ok")
 
     tab_wave, tab_spec, tab_sgram, tab_history = st.tabs(["Waveform", "Spectrum", "Spectrogram", "Evidence History"])
     with tab_wave:

@@ -58,6 +58,9 @@ class AcousticEvent(BaseModel):
     beamforming_method: Optional[str] = None
     beam_score: Optional[float] = None
     beam_snr_gain_db: Optional[float] = None
+    beam_confidence_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    beam_peak_to_median: Optional[float] = None
+    beam_peak_to_second_peak: Optional[float] = None
     bearing_stable: Optional[bool] = None
     bearing_uncertainty_deg: Optional[float] = None
     track_id: Optional[str] = None

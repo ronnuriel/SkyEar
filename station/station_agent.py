@@ -212,6 +212,7 @@ def _write_local_monitor(
     spectrogram: dict[str, Any],
     harmonic_lines: list[dict[str, Any]],
     hf_result: Any,
+    beam_result: BeamformingResult | None,
     server_state: dict[str, Any],
     history_max_rows: int | None,
     updated_unix: float,
@@ -227,6 +228,7 @@ def _write_local_monitor(
         spectrogram=spectrogram,
         harmonic_lines=harmonic_lines,
         hf_result=hf_result,
+        beam_result=beam_result,
         server_state=server_state,
         updated_unix=updated_unix,
     )
@@ -395,6 +397,7 @@ def main():
                 low_hz=int(beamforming_cfg.get("low_hz", det_cfg.get("f0_min", 500))),
                 high_hz=int(beamforming_cfg.get("high_hz", max_freq)),
                 bearing_stability_deg=float(beamforming_cfg.get("bearing_stability_deg", 15.0)),
+                include_scan=True,
             )
             azimuth = beam.bearing_deg
             direction_confidence = beam.beam_score
@@ -444,6 +447,9 @@ def main():
             beamforming_method=beam.beamforming_method if beamforming_allowed else None,
             beam_score=beam.beam_score,
             beam_snr_gain_db=beam.beam_snr_gain_db,
+            beam_confidence_pct=beam.beam_confidence_pct,
+            beam_peak_to_median=beam.beam_peak_to_median,
+            beam_peak_to_second_peak=beam.beam_peak_to_second_peak,
             bearing_stable=beam.bearing_stable if beamforming_allowed else None,
             bearing_uncertainty_deg=beam.bearing_uncertainty_deg,
             rms=frame.rms,
@@ -465,6 +471,9 @@ def main():
                 "beamforming_method": beam.beamforming_method if beamforming_allowed else None,
                 "beam_score": beam.beam_score,
                 "beam_snr_gain_db": beam.beam_snr_gain_db,
+                "beam_confidence_pct": beam.beam_confidence_pct,
+                "beam_peak_to_median": beam.beam_peak_to_median,
+                "beam_peak_to_second_peak": beam.beam_peak_to_second_peak,
                 "bearing_stable": beam.bearing_stable if beamforming_allowed else None,
                 "bearing_uncertainty_deg": beam.bearing_uncertainty_deg,
                 "suspect_threshold": frame.suspect_threshold,
@@ -533,6 +542,7 @@ def main():
                 spectrogram=spectrogram,
                 harmonic_lines=harmonic_lines,
                 hf_result=last_hf_result,
+                beam_result=beam if beamforming_allowed else None,
                 server_state=local_server_state,
                 history_max_rows=local_history_max_rows,
                 updated_unix=now,
@@ -572,11 +582,12 @@ def main():
                     spectrogram=spectrogram,
                     harmonic_lines=harmonic_lines,
                     hf_result=last_hf_result,
+                    beam_result=beam if beamforming_allowed else None,
                     server_state=local_server_state,
-                history_max_rows=local_history_max_rows,
-                updated_unix=time.time(),
-                append_history=False,
-            )
+                    history_max_rows=local_history_max_rows,
+                    updated_unix=time.time(),
+                    append_history=False,
+                )
             except Exception as e:
                 print("[WARN] local monitor write failed:", e)
 
@@ -629,6 +640,7 @@ def main():
                     spectrogram=spectrogram,
                     harmonic_lines=harmonic_lines,
                     hf_result=last_hf_result,
+                    beam_result=beam if beamforming_allowed else None,
                     server_state=local_server_state,
                     history_max_rows=local_history_max_rows,
                     updated_unix=time.time(),

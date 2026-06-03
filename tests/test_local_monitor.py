@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from types import SimpleNamespace
 
 from dashboard.local_station_app import load_history_rows, parse_snapshot, snapshot_is_stale
 from shared.event_schema import AcousticEvent, EventStatus
@@ -71,6 +72,7 @@ def test_local_monitor_payload_contains_event_audio_spectrum_spectrogram(tmp_pat
         spectrum=spectrum,
         spectrogram=spectrogram,
         harmonic_lines=[{"k": 1, "freq_hz": 920.0}],
+        beam_result=SimpleNamespace(beam_scan_deg=[0.0, 5.0], beam_scan_score=[0.1, 0.2]),
         server_state={"last_send_error": "server down"},
         updated_unix=101.0,
     )
@@ -79,6 +81,7 @@ def test_local_monitor_payload_contains_event_audio_spectrum_spectrogram(tmp_pat
     assert len(snapshot["audio"]["waveform"]) == 32
     assert snapshot["spectrum"] == spectrum
     assert snapshot["spectrogram"] == spectrogram
+    assert snapshot["beam"]["beam_scan_deg"] == [0.0, 5.0]
     assert "raw_audio" not in snapshot["audio"]
 
     state_path = tmp_path / "station_latest.json"

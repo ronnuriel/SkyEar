@@ -40,25 +40,25 @@ hf:
   min_ml_drone_like_windows: 3
 
 mic_array:
-  profile: explicit_8ch_field_array
+  profile: field_8ch_r0_35m
   sync_mode: synchronized
   channel_mode: array_8ch
   mic_positions_m:
-    - [0.120, 0.000, 0.000]
-    - [0.085, 0.085, 0.000]
-    - [0.000, 0.120, 0.000]
-    - [-0.085, 0.085, 0.000]
-    - [-0.120, 0.000, 0.000]
-    - [-0.085, -0.085, 0.000]
-    - [0.000, -0.120, 0.000]
-    - [0.085, -0.085, 0.000]
+    - [0.350, 0.000, 0.000]
+    - [0.247, 0.247, 0.000]
+    - [0.000, 0.350, 0.000]
+    - [-0.247, 0.247, 0.000]
+    - [-0.350, 0.000, 0.000]
+    - [-0.247, -0.247, 0.000]
+    - [0.000, -0.350, 0.000]
+    - [0.247, -0.247, 0.000]
 
 beamforming:
   enabled: true
   method: delay_and_sum
   scan_step_deg: 5
   low_hz: 500
-  high_hz: 7000
+  high_hz: 3000
   bearing_stability_deg: 15.0
 
 raw_recording:

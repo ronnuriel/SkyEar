@@ -85,11 +85,36 @@ def build_local_monitor_snapshot(
     spectrogram: Mapping[str, Any],
     harmonic_lines: list[dict[str, Any]],
     hf_result: Any = None,
+    beam_result: Any = None,
     server_state: Mapping[str, Any] | None = None,
     updated_unix: float | None = None,
 ) -> dict[str, Any]:
     metadata = event.metadata or {}
     updated_unix = time.time() if updated_unix is None else float(updated_unix)
+    beam = {
+        "estimated_azimuth_deg": event.estimated_azimuth_deg,
+        "direction_confidence": event.direction_confidence,
+        "beamforming_method": event.beamforming_method or metadata.get("beamforming_method"),
+        "beam_score": event.beam_score if event.beam_score is not None else metadata.get("beam_score"),
+        "beam_snr_gain_db": event.beam_snr_gain_db if event.beam_snr_gain_db is not None else metadata.get("beam_snr_gain_db"),
+        "beam_confidence_pct": event.beam_confidence_pct
+        if getattr(event, "beam_confidence_pct", None) is not None
+        else metadata.get("beam_confidence_pct"),
+        "beam_peak_to_median": event.beam_peak_to_median
+        if getattr(event, "beam_peak_to_median", None) is not None
+        else metadata.get("beam_peak_to_median"),
+        "beam_peak_to_second_peak": event.beam_peak_to_second_peak
+        if getattr(event, "beam_peak_to_second_peak", None) is not None
+        else metadata.get("beam_peak_to_second_peak"),
+        "bearing_stable": event.bearing_stable if event.bearing_stable is not None else metadata.get("bearing_stable"),
+        "bearing_uncertainty_deg": event.bearing_uncertainty_deg
+        if event.bearing_uncertainty_deg is not None
+        else metadata.get("bearing_uncertainty_deg"),
+    }
+    if beam_result is not None:
+        beam["beam_scan_deg"] = getattr(beam_result, "beam_scan_deg", None)
+        beam["beam_scan_score"] = getattr(beam_result, "beam_scan_score", None)
+
     return {
         "updated_unix": updated_unix,
         "event": event.model_dump(mode="json"),
@@ -109,17 +134,7 @@ def build_local_monitor_snapshot(
             "error": getattr(hf_result, "error", None) if hf_result is not None else metadata.get("hf_error_message"),
             "available": not bool(event.hf_error),
         },
-        "beam": {
-            "estimated_azimuth_deg": event.estimated_azimuth_deg,
-            "direction_confidence": event.direction_confidence,
-            "beamforming_method": event.beamforming_method or metadata.get("beamforming_method"),
-            "beam_score": event.beam_score if event.beam_score is not None else metadata.get("beam_score"),
-            "beam_snr_gain_db": event.beam_snr_gain_db if event.beam_snr_gain_db is not None else metadata.get("beam_snr_gain_db"),
-            "bearing_stable": event.bearing_stable if event.bearing_stable is not None else metadata.get("bearing_stable"),
-            "bearing_uncertainty_deg": event.bearing_uncertainty_deg
-            if event.bearing_uncertainty_deg is not None
-            else metadata.get("bearing_uncertainty_deg"),
-        },
+        "beam": beam,
         "server": dict(server_state or {}),
     }
 
