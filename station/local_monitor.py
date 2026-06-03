@@ -73,6 +73,20 @@ def history_row_from_event(event: AcousticEvent) -> dict[str, Any]:
         "candidate_run": event.candidate_run if event.candidate_run is not None else metadata.get("candidate_run"),
         "ml_positive_run": event.ml_positive_run if event.ml_positive_run is not None else metadata.get("ml_positive_run"),
         "strong_run": event.strong_run if event.strong_run is not None else metadata.get("strong_run"),
+        "decision_stage": event.decision_stage if event.decision_stage is not None else metadata.get("decision_stage"),
+        "blocked_by": event.blocked_by if event.blocked_by is not None else metadata.get("blocked_by"),
+        "candidate_block_reason": event.candidate_block_reason
+        if event.candidate_block_reason is not None
+        else metadata.get("candidate_block_reason"),
+        "alert_block_reason": event.alert_block_reason
+        if event.alert_block_reason is not None
+        else metadata.get("alert_block_reason"),
+        "alert_blocked_reason": event.alert_blocked_reason
+        if event.alert_blocked_reason is not None
+        else metadata.get("alert_blocked_reason"),
+        "why_candidate_run_reset": event.why_candidate_run_reset
+        if event.why_candidate_run_reset is not None
+        else metadata.get("why_candidate_run_reset"),
     }
 
 

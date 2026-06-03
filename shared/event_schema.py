@@ -58,6 +58,19 @@ class AcousticEvent(BaseModel):
     ml_positive_run: Optional[int] = Field(default=None, ge=0)
     strong_run: Optional[int] = Field(default=None, ge=0)
     estimated_detection_delay_sec: Optional[float] = Field(default=None, ge=0.0)
+    decision_stage: Optional[str] = None
+    blocked_by: Optional[str] = None
+    hf_watch_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    hf_candidate_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    hf_strong_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    hf_candidate_pass: Optional[bool] = None
+    hf_strong_pass: Optional[bool] = None
+    harmonic_pass: Optional[bool] = None
+    single_channel_mode: Optional[bool] = None
+    candidate_block_reason: Optional[str] = None
+    alert_block_reason: Optional[str] = None
+    alert_blocked_reason: Optional[str] = None
+    why_candidate_run_reset: Optional[str] = None
     estimated_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
     direction_confidence: Optional[float] = None
     beamforming_method: Optional[str] = None

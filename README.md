@@ -189,6 +189,37 @@ Run the station:
 skyear-station --config configs/config_station.yaml
 ```
 
+## Decision Profiles
+
+SkyEar has two local decision profiles:
+
+- `conservative`: production-safe default. It is stricter about ML probability and persistence, and is designed to reduce false alerts.
+- `field_debug`: one-microphone field-test profile. It makes intermediate states more visible, such as `ACOUSTIC DRONE WATCH`, `WEAK LOCAL CANDIDATE`, `LOCAL DRONE CANDIDATE`, and `STRONG LOCAL CANDIDATE`.
+
+`field_debug` is useful when a real flight produces strong harmonic evidence but HF stays below the conservative `0.90` ML threshold. It still blocks single-microphone alert by default.
+
+Example:
+
+```yaml
+detection:
+  profile: field_debug
+  hf_watch_threshold: 0.50
+  hf_candidate_threshold: 0.70
+  hf_strong_threshold: 0.85
+  ml_positive_threshold: 0.90
+  single_mic_candidate_run_required: 2
+  single_mic_strong_run_required: 3
+  allow_single_mic_alert: false
+```
+
+For one-mic field tests:
+
+- Harmonic high + HF low becomes `ACOUSTIC HARMONIC SOURCE` or `NON-DRONE HARMONIC`.
+- HF above watch threshold + stable harmonic becomes `ACOUSTIC DRONE WATCH`.
+- HF above candidate threshold for repeated windows + stable harmonic becomes `LOCAL DRONE CANDIDATE`.
+- HF above strong threshold for repeated windows + stable harmonic becomes `STRONG LOCAL CANDIDATE`.
+- Harmonic-only evidence must not become alert on one microphone.
+
 For an 8-channel array, start from:
 
 ```text

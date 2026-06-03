@@ -89,10 +89,18 @@ def apply_mic_array_profile_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
             beam_cfg[key] = beam_profile[key]
     return resolved
 
-def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | None = None, hf_cfg: dict[str, Any] | None = None) -> StationDetectorStateConfig:
+def _detector_config(
+    det_cfg: dict[str, Any],
+    stability_cfg: dict[str, Any] | None = None,
+    hf_cfg: dict[str, Any] | None = None,
+    detection_cfg: dict[str, Any] | None = None,
+) -> StationDetectorStateConfig:
     stability_cfg = stability_cfg or {}
     hf_cfg = hf_cfg or {}
+    detection_cfg = detection_cfg or {}
+    profile = str(detection_cfg.get("profile", det_cfg.get("profile", "conservative")))
     return StationDetectorStateConfig(
+        detection_profile=profile,
         f0_min=int(det_cfg.get("f0_min", 500)),
         f0_max=int(det_cfg.get("f0_max", 2200)),
         max_freq=int(det_cfg.get("max_freq", 7000)),
@@ -108,9 +116,16 @@ def _detector_config(det_cfg: dict[str, Any], stability_cfg: dict[str, Any] | No
         stability_min_score_windows=int(stability_cfg.get("min_score_windows", 3)),
         advisory_threshold=float(hf_cfg.get("threshold", 0.70)),
         hf_negative_threshold=float(hf_cfg.get("negative_threshold", 0.20)),
+        hf_watch_threshold=float(detection_cfg.get("hf_watch_threshold", hf_cfg.get("hf_watch_threshold", 0.50))),
+        hf_candidate_threshold=float(detection_cfg.get("hf_candidate_threshold", hf_cfg.get("hf_candidate_threshold", 0.70))),
+        hf_strong_threshold=float(detection_cfg.get("hf_strong_threshold", hf_cfg.get("hf_strong_threshold", 0.85))),
+        ml_positive_threshold=float(detection_cfg.get("ml_positive_threshold", hf_cfg.get("ml_positive_threshold", hf_cfg.get("ml_strong_threshold", 0.90)))),
+        single_mic_candidate_run_required=int(detection_cfg.get("single_mic_candidate_run_required", hf_cfg.get("single_mic_candidate_run_required", 2))),
+        single_mic_strong_run_required=int(detection_cfg.get("single_mic_strong_run_required", hf_cfg.get("single_mic_strong_run_required", 3))),
+        allow_single_mic_alert=bool(detection_cfg.get("allow_single_mic_alert", hf_cfg.get("allow_single_mic_alert", False))),
         hf_required_for_single_channel_alert=bool(hf_cfg.get("required_for_single_channel_alert", True)),
         hf_negative_caps_status=bool(hf_cfg.get("negative_caps_status", True)),
-        ml_strong_threshold=float(hf_cfg.get("ml_strong_threshold", 0.90)),
+        ml_strong_threshold=float(hf_cfg.get("ml_strong_threshold", detection_cfg.get("ml_positive_threshold", 0.90))),
         ml_candidate_harmonic_min_pct=float(hf_cfg.get("ml_candidate_harmonic_min_pct", 0.15)),
         ml_drone_like_harmonic_min_pct=float(hf_cfg.get("ml_drone_like_harmonic_min_pct", 0.45)),
         ml_only_duration_for_drone_like_sec=float(hf_cfg.get("ml_only_duration_for_drone_like_sec", 8.0)),
@@ -179,6 +194,34 @@ def _audio_device_label(audio_cfg: dict[str, Any]) -> str | None:
     if audio_cfg.get("device_id") is not None:
         return f"id={audio_cfg['device_id']}"
     return None
+
+
+def _selected_audio_device_summary(audio_cfg: dict[str, Any]) -> dict[str, Any]:
+    device_id = audio_cfg.get("device_id")
+    device_name = audio_cfg.get("device_name")
+    try:
+        devices = list_input_devices()
+    except Exception:
+        devices = []
+    if device_name:
+        selected_name = str(device_name)
+    elif device_id is None:
+        selected_name = "system_default"
+    else:
+        try:
+            lookup_id: Any = int(device_id)
+        except (TypeError, ValueError):
+            lookup_id = device_id
+        selected_name = next(
+            (str(item.get("name")) for item in devices if item.get("id") == lookup_id),
+            "unknown",
+        )
+    return {
+        "selected_audio_device_id": device_id,
+        "selected_audio_device_name": selected_name,
+        "channels": int(audio_cfg["channels"]),
+        "sample_rate": int(audio_cfg["sample_rate"]),
+    }
 
 
 def _optional_float(value: Any) -> float | None:
@@ -353,6 +396,7 @@ def main():
     station_id = _station_id(station_cfg)
     station_geo = _station_geo_fields(station_cfg)
     det_cfg, dir_cfg, server_cfg = cfg["detector"], cfg["direction"], cfg["server"]
+    detection_cfg = cfg.get("detection", {})
     mic_cfg = cfg.get("mic_array", {})
     stability_cfg = cfg.get("stability", {})
     hf_cfg = cfg.get("hf", {})
@@ -362,7 +406,7 @@ def main():
     local_monitor_cfg = cfg.get("local_monitor", {})
     coverage_radius_m = station_cfg.get("coverage_radius_m")
 
-    detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg))
+    detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg, detection_cfg))
     hf_detector = None
     if bool(hf_cfg.get("enabled", False)):
         hf_detector = _build_hf_detector(hf_cfg)
@@ -414,6 +458,14 @@ def main():
         print("[WARN] continuing station in local monitor mode; central posting will keep retrying.")
 
     print("Starting station:", station_id)
+    audio_device_summary = _selected_audio_device_summary(audio_cfg)
+    print(
+        "Audio device:",
+        f"selected_audio_device_id={audio_device_summary['selected_audio_device_id']}",
+        f"selected_audio_device_name={audio_device_summary['selected_audio_device_name']}",
+        f"channels={audio_device_summary['channels']}",
+        f"sample_rate={audio_device_summary['sample_rate']}",
+    )
 
     for audio in audio_blocks(
         device_id=audio_cfg.get("device_id"),
@@ -509,6 +561,19 @@ def main():
             ml_positive_run=frame.ml_positive_run,
             strong_run=frame.strong_run,
             estimated_detection_delay_sec=frame.estimated_detection_delay_sec,
+            decision_stage=frame.decision_stage,
+            blocked_by=frame.blocked_by,
+            hf_watch_threshold=frame.hf_watch_threshold,
+            hf_candidate_threshold=frame.hf_candidate_threshold,
+            hf_strong_threshold=frame.hf_strong_threshold,
+            hf_candidate_pass=frame.hf_candidate_pass,
+            hf_strong_pass=frame.hf_strong_pass,
+            harmonic_pass=frame.harmonic_pass,
+            single_channel_mode=frame.single_channel_mode,
+            candidate_block_reason=frame.candidate_block_reason,
+            alert_block_reason=frame.alert_block_reason,
+            alert_blocked_reason=frame.alert_blocked_reason,
+            why_candidate_run_reset=frame.why_candidate_run_reset,
             estimated_azimuth_deg=azimuth,
             direction_confidence=direction_confidence,
             beamforming_method=beam.beamforming_method if beamforming_allowed else None,
@@ -571,6 +636,19 @@ def main():
                 "ml_positive_run": frame.ml_positive_run,
                 "strong_run": frame.strong_run,
                 "estimated_detection_delay_sec": frame.estimated_detection_delay_sec,
+                "decision_stage": frame.decision_stage,
+                "blocked_by": frame.blocked_by,
+                "hf_watch_threshold": frame.hf_watch_threshold,
+                "hf_candidate_threshold": frame.hf_candidate_threshold,
+                "hf_strong_threshold": frame.hf_strong_threshold,
+                "hf_candidate_pass": frame.hf_candidate_pass,
+                "hf_strong_pass": frame.hf_strong_pass,
+                "harmonic_pass": frame.harmonic_pass,
+                "single_channel_mode": frame.single_channel_mode,
+                "candidate_block_reason": frame.candidate_block_reason,
+                "alert_block_reason": frame.alert_block_reason,
+                "alert_blocked_reason": frame.alert_blocked_reason,
+                "why_candidate_run_reset": frame.why_candidate_run_reset,
                 "hf_label": last_hf_result.label if last_hf_result is not None else None,
                 "hf_class_probs": last_hf_result.class_probs if last_hf_result is not None else {},
                 "hf_error_message": hf_error_message,
@@ -582,16 +660,33 @@ def main():
 
         hf_label = last_hf_result.label if last_hf_result is not None else None
         hf_display = f"{hf_p_drone:.2f}" if hf_p_drone is not None else "None"
+        if frame.hf_strong_pass:
+            hf_pass_text = "strong"
+        elif frame.hf_candidate_pass:
+            hf_pass_text = "candidate"
+        elif hf_p_drone is not None and hf_p_drone >= frame.hf_watch_threshold:
+            hf_pass_text = "watch"
+        else:
+            hf_pass_text = "none"
         hf_mode_note = " HF unavailable — harmonic-only mode, alert disabled" if hf_error else ""
+        spatial_text = (
+            "spatial=single_channel"
+            if frame.single_channel_mode
+            else f"agree={event.channel_agreement_count}/{event.channel_count}"
+        )
         print(
             f"{time.strftime('%H:%M:%S')} {event.status:11s} "
             f"conf={event.confidence:.2f} harm={event.harmonic_score:.1f} "
             f"th={frame.suspect_threshold:.1f}/{frame.alert_threshold:.1f} "
             f"f0={event.best_f0_hz} stable={frame.f0_stable} "
             f"hf={hf_display} label={hf_label} hf_err={hf_error} "
+            f"stage={frame.decision_stage} blocked={frame.blocked_by or '-'} "
+            f"hfpass={hf_pass_text} single={1 if frame.single_channel_mode else 0} "
+            f"cand_block={frame.candidate_block_reason or '-'} "
+            f"alert_block={frame.alert_block_reason or '-'} "
             f"rms={event.rms:.4f} dur={event.duration_sec:.1f} "
             f"cand={frame.candidate_run} mlrun={frame.ml_positive_run} strong={frame.strong_run} "
-            f"agree={event.channel_agreement_count}/{event.channel_count} "
+            f"{spatial_text} "
             f"az={event.estimated_azimuth_deg} beam={event.beam_score}{hf_mode_note}"
         )
         local_server_state = {

@@ -180,7 +180,7 @@ def test_alert_cannot_happen_with_candidate_run_zero():
 
 
 def test_hf_positive_with_high_harmonic_can_reach_alert_after_duration():
-    state = _calibrated_state()
+    state = _calibrated_state(allow_single_mic_alert=True)
 
     first = state.update(_harmonic(), SR, 3.0, hf_p_drone=0.95)
     state.update(_harmonic(), SR, 4.5, hf_p_drone=0.95)
@@ -291,7 +291,7 @@ def test_two_consecutive_drone_candidates_create_local_candidate():
     assert frame.estimated_detection_delay_sec == 1.0
 
 
-def test_three_consecutive_candidates_create_strong_local_candidate_without_drone_like():
+def test_three_consecutive_candidates_without_harmonic_support_stay_local_candidate():
     state = _calibrated_state(smoothing_enabled=False)
 
     state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
@@ -299,10 +299,10 @@ def test_three_consecutive_candidates_create_strong_local_candidate_without_dron
     frame = state.update(_quiet(), SR, 5.0, hf_p_drone=0.97)
 
     assert frame.status == "suspect"
-    assert frame.operator_label == "strong_local_candidate"
+    assert frame.operator_label == "local_drone_candidate"
     assert frame.candidate_run == 3
     assert frame.ml_positive_run == 3
-    assert frame.strong_run == 3
+    assert frame.strong_run == 0
     assert frame.combined_drone_evidence_pct == 0.0
 
 
@@ -403,7 +403,7 @@ def test_multichannel_agreement_and_stable_f0_can_alert_despite_negative_hf():
 
 
 def test_alert_hysteresis_holds_briefly_then_clears():
-    state = _calibrated_state(clear_after_sec=2.5)
+    state = _calibrated_state(clear_after_sec=2.5, allow_single_mic_alert=True)
 
     state.update(_harmonic(), SR, 3.0, hf_p_drone=0.95)
     state.update(_harmonic(), SR, 4.5, hf_p_drone=0.95)
@@ -499,3 +499,146 @@ def test_background_like_single_channel_combined_low_cannot_be_drone_like():
 
     assert status == "suspect"
     assert label != "drone_like"
+
+
+def test_field_debug_hf_078_stable_harmonic_two_windows_is_local_candidate_not_alert():
+    state = _calibrated_state(
+        detection_profile="field_debug",
+        hf_candidate_threshold=0.70,
+        hf_strong_threshold=0.85,
+        single_mic_candidate_run_required=2,
+        single_mic_strong_run_required=3,
+        allow_single_mic_alert=False,
+    )
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.78)
+    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.78)
+
+    assert frame.status == "suspect"
+    assert frame.operator_label == "local_drone_candidate"
+    assert frame.candidate_run == 2
+    assert frame.ml_positive_run == 2
+    assert frame.strong_run == 0
+    assert frame.hf_candidate_pass is True
+    assert frame.hf_strong_pass is False
+    assert frame.harmonic_pass is True
+    assert frame.single_channel_mode is True
+    assert frame.alert_blocked_reason == "single_mic_alert_disabled"
+
+
+def test_field_debug_hf_082_stable_harmonic_three_windows_is_strong_candidate_not_alert():
+    state = _calibrated_state(
+        detection_profile="field_debug",
+        hf_candidate_threshold=0.70,
+        hf_strong_threshold=0.80,
+        single_mic_candidate_run_required=2,
+        single_mic_strong_run_required=3,
+        allow_single_mic_alert=False,
+    )
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.82)
+    state.update(_harmonic(), SR, 4.5, hf_p_drone=0.82)
+    frame = state.update(_harmonic(), SR, 6.0, hf_p_drone=0.82)
+
+    assert frame.status == "suspect"
+    assert frame.operator_label == "strong_local_candidate"
+    assert frame.candidate_run == 3
+    assert frame.ml_positive_run == 3
+    assert frame.strong_run == 3
+    assert frame.hf_candidate_pass is True
+    assert frame.hf_strong_pass is True
+    assert frame.alert_blocked_reason == "single_mic_alert_disabled"
+
+
+def test_field_debug_hf_low_high_harmonic_is_harmonic_source_not_candidate():
+    state = _calibrated_state(detection_profile="field_debug", allow_single_mic_alert=False)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.10)
+    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.10)
+
+    assert frame.status == "suspect"
+    assert frame.operator_label in {"acoustic_harmonic_source", "non_drone_harmonic"}
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_pass is False
+    assert frame.hf_negative is True
+
+
+def test_field_debug_harmonic_high_alone_never_alerts_single_channel():
+    state = _calibrated_state(detection_profile="field_debug", allow_single_mic_alert=False)
+
+    state.update(_harmonic(), SR, 3.0)
+    state.update(_harmonic(), SR, 4.5)
+    frame = state.update(_harmonic(), SR, 6.0)
+
+    assert frame.channel_count == 1
+    assert frame.agreement_count == 1
+    assert frame.status == "suspect"
+    assert frame.status != "alert"
+    assert frame.operator_label == "acoustic_harmonic_source"
+    assert frame.alert_blocked_reason == "single_mic_alert_disabled"
+
+
+def test_conservative_profile_keeps_hf_078_below_candidate_threshold():
+    state = _calibrated_state(detection_profile="conservative")
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.78)
+    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.78)
+
+    assert frame.status == "suspect"
+    assert frame.operator_label not in {"local_drone_candidate", "strong_local_candidate"}
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_pass is False
+    assert frame.hf_candidate_threshold == 0.90
+
+
+def test_field_debug_candidate_run_cannot_emit_background_without_harmonic_support():
+    state = _calibrated_state(detection_profile="field_debug", allow_single_mic_alert=False)
+
+    frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.78)
+
+    assert frame.candidate_run == 1
+    assert frame.status == "suspect"
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.candidate_block_reason == "harmonic_below_candidate_support"
+    assert frame.why_candidate_run_reset == ""
+
+
+def test_field_debug_local_candidate_cannot_emit_background():
+    state = _calibrated_state(detection_profile="field_debug", allow_single_mic_alert=False)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.78)
+    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.78)
+
+    assert frame.operator_label == "local_drone_candidate"
+    assert frame.decision_stage == "local_drone_candidate"
+    assert frame.status == "suspect"
+
+
+def test_field_debug_hf_drop_resets_stale_local_candidate_stage():
+    state = _calibrated_state(detection_profile="field_debug", allow_single_mic_alert=False)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.78)
+    local = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.78)
+    dropped = state.update(_harmonic(), SR, 6.0, hf_p_drone=0.10)
+
+    assert local.operator_label == "local_drone_candidate"
+    assert dropped.candidate_run == 0
+    assert dropped.hf_candidate_pass is False
+    assert dropped.decision_stage not in {
+        "weak_local_candidate",
+        "local_drone_candidate",
+        "strong_local_candidate",
+        "acoustic_drone_watch",
+    }
+    assert dropped.operator_label in {"acoustic_harmonic_source", "non_drone_harmonic"}
+    assert dropped.why_candidate_run_reset == "hf_below_candidate_threshold"
+
+
+def test_harmonic_below_candidate_support_is_not_reported_as_run_reset_while_incrementing():
+    state = _calibrated_state(detection_profile="field_debug", allow_single_mic_alert=False)
+
+    frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.78)
+
+    assert frame.candidate_run == 1
+    assert frame.candidate_block_reason == "harmonic_below_candidate_support"
+    assert frame.why_candidate_run_reset == ""

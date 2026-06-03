@@ -26,6 +26,16 @@ detector:
   min_alert_duration_sec: 2.0
   clear_after_sec: 3.0
 
+detection:
+  profile: conservative
+  hf_watch_threshold: 0.50
+  hf_candidate_threshold: 0.70
+  hf_strong_threshold: 0.85
+  ml_positive_threshold: 0.90
+  single_mic_candidate_run_required: 2
+  single_mic_strong_run_required: 3
+  allow_single_mic_alert: false
+
 stability:
   enabled: true
   history_windows: 3

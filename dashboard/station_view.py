@@ -157,6 +157,8 @@ def decision_score_values(event: dict) -> dict[str, float | None]:
 OPERATOR_LABEL_TEXT = {
     "background": "BACKGROUND",
     "acoustic_harmonic_source": "ACOUSTIC HARMONIC SOURCE",
+    "acoustic_drone_watch": "ACOUSTIC DRONE WATCH",
+    "weak_local_candidate": "WEAK LOCAL CANDIDATE",
     "non_drone_harmonic": "NON-DRONE HARMONIC",
     "ml_drone_candidate": "ML DRONE CANDIDATE",
     "local_drone_candidate": "LOCAL DRONE CANDIDATE",
@@ -183,6 +185,8 @@ def operator_action_label(fusion_level: int, event: dict | None = None) -> str:
         return "take cover"
     if int(fusion_level or 0) >= 1 or status in {"suspect", "drone_like"} or label in {
         "ml_drone_candidate",
+        "acoustic_drone_watch",
+        "weak_local_candidate",
         "local_drone_candidate",
         "strong_local_candidate",
         "drone_like",
@@ -205,6 +209,10 @@ def decision_display_state(event: dict) -> dict[str, str]:
         return {"label": "STRONG LOCAL CANDIDATE", "harmonic_color": "#ea580c", "ml_color": "#2563eb", "combined_color": "#ea580c"}
     if label == "local_drone_candidate":
         return {"label": "LOCAL DRONE CANDIDATE", "harmonic_color": "#ca8a04", "ml_color": "#2563eb", "combined_color": "#ca8a04"}
+    if label == "weak_local_candidate":
+        return {"label": "WEAK LOCAL CANDIDATE", "harmonic_color": "#ca8a04", "ml_color": "#2563eb", "combined_color": "#ca8a04"}
+    if label == "acoustic_drone_watch":
+        return {"label": "ACOUSTIC DRONE WATCH", "harmonic_color": "#ca8a04", "ml_color": "#2563eb", "combined_color": "#a3a3a3"}
     if combined >= 0.60:
         return {"label": "STRONG ML DRONE CANDIDATE", "harmonic_color": "#ea580c", "ml_color": "#2563eb", "combined_color": "#dc2626"}
     if harmonic >= 0.60 and ml_value >= 0.60:
