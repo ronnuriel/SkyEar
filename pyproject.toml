@@ -71,6 +71,7 @@ skyear-eval-audio = "tools.eval_audio:main"
 skyear-summarize-benchmark = "tools.summarize_benchmark:main"
 skyear-build-training-splits = "tools.build_training_splits:main"
 skyear-simulate-geo-events = "tools.simulate_geo_events:main"
+skyear-simulate-two-near-one-far = "tools.simulate_two_near_one_far:main"
 skyear-run-benchmarks = "tools.run_dataset_benchmarks:main"
 skyear-combine-benchmarks = "tools.combine_benchmark_summaries:main"
 

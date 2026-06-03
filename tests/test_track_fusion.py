@@ -4,6 +4,7 @@ import time
 
 from server.track_fusion import cluster_events_into_tracks, fuse_tracks
 from shared.event_schema import AcousticEvent, GeoPoint
+from tools.simulate_two_near_one_far import build_events
 
 
 def _event(
@@ -110,3 +111,33 @@ def test_global_level_is_max_track_level_not_sum_of_unrelated_tracks():
     assert fusion.global_level == 1
     assert fusion.level == 1
     assert fusion.interpretation == "multiple local candidates"
+
+
+def test_two_near_one_far_simulation_creates_two_tracks():
+    tracks = cluster_events_into_tracks(build_events())
+    station_sets = {tuple(track.station_ids) for track in tracks}
+
+    assert len(tracks) >= 2
+    assert ("sim_001", "sim_002") in station_sets
+    assert ("sim_003",) in station_sets
+    assert all("sim_003" not in track.station_ids or len(track.station_ids) == 1 for track in tracks)
+
+    near_track = next(track for track in tracks if track.station_ids == ["sim_001", "sim_002"])
+    far_track = next(track for track in tracks if track.station_ids == ["sim_003"])
+
+    assert near_track.level >= 2
+    assert far_track.level >= 1
+    assert near_track.interpretation == "multi-station overlapping candidate"
+    assert far_track.interpretation == "single-station candidate"
+
+
+def test_two_near_one_far_fusion_does_not_add_far_station_to_near_track():
+    fusion = fuse_tracks(build_events())
+
+    assert len(fusion.tracks) >= 2
+    assert fusion.interpretation == "multiple local candidates"
+    near_track = next(track for track in fusion.tracks if track.station_ids == ["sim_001", "sim_002"])
+
+    assert near_track.station_ids == ["sim_001", "sim_002"]
+    assert "sim_003" not in near_track.station_ids
+    assert "sim_003" not in near_track.reason
