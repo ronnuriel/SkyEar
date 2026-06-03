@@ -5,10 +5,12 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from dashboard.map_view import bearing_ray_rows
 from dashboard.station_view import (
     external_spectrum_app_url,
     health_badge_label,
     is_event_stale_for_fusion,
+    operator_action_label,
     plot_spectrum_figure,
     render_decision_bars,
     status_label,
@@ -81,6 +83,12 @@ def _render_station_card(
         cols[2].metric("Best f0", event.get("best_f0_hz") or "none")
         cols[3].metric("Fusion", f"LEVEL {fusion_level}")
 
+        action_cols = st.columns(4)
+        action_cols[0].metric("Operator action", operator_action_label(fusion_level, event).upper())
+        action_cols[1].metric("Bearing", event.get("estimated_azimuth_deg") if event.get("estimated_azimuth_deg") is not None else "n/a")
+        action_cols[2].metric("Beam score", f"{float(event.get('beam_score') or 0.0):.3f}" if event.get("beam_score") is not None else "n/a")
+        action_cols[3].metric("Bearing stable", "yes" if event.get("bearing_stable") else "no")
+
         detail_cols = st.columns(4)
         agreement = event.get("channel_agreement_count")
         channel_count = event.get("channel_count")
@@ -117,6 +125,13 @@ def _draw_track_card(track: dict):
         cols[0].metric("Stations", ", ".join(track.get("station_ids") or []))
         cols[1].metric("Confidence", f"{float(track.get('confidence') or 0.0):.2f}")
         cols[2].metric("Same f0", "yes" if track.get("same_f0") else "no")
+        estimated_source = track.get("estimated_source") or {}
+        if estimated_source:
+            st.caption(
+                "Estimated source: "
+                f"{estimated_source.get('latitude')}, {estimated_source.get('longitude')} "
+                f"({estimated_source.get('source')})"
+            )
         st.caption(track.get("reason") or "")
 
 
@@ -166,6 +181,7 @@ try:
 
     col2.metric("Fusion confidence", f"{confidence:.2f}")
     col3.metric("Interpretation", interpretation)
+    st.metric("Recommended operator action", operator_action_label(fusion_level).upper())
     st.caption(f"{reason} | Active tracks: {len(tracks)}")
     if tracks:
         st.subheader("Active tracks")
@@ -217,6 +233,10 @@ try:
                         st.metric("Last heartbeat", timing["heartbeat_age"])
                         st.metric("Latency", timing["latency"])
                         st.caption("Station is online/background; no acoustic event received yet.")
+    bearing_rows = bearing_ray_rows([event for _, event in station_events])
+    if bearing_rows:
+        st.subheader("Map bearing cues")
+        st.dataframe(pd.DataFrame(bearing_rows), width="stretch")
 except Exception as e:
     st.error(f"Could not load stations: {e}")
 

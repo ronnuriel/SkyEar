@@ -7,7 +7,7 @@ station:
 
 
 audio:
-  device_id: 1
+  device_id: 0
   sample_rate: 44100
   channels: 1
   window_sec: 1.0

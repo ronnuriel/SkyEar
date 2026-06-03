@@ -55,6 +55,12 @@ class AcousticEvent(BaseModel):
     estimated_detection_delay_sec: Optional[float] = Field(default=None, ge=0.0)
     estimated_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
     direction_confidence: Optional[float] = None
+    beamforming_method: Optional[str] = None
+    beam_score: Optional[float] = None
+    beam_snr_gain_db: Optional[float] = None
+    bearing_stable: Optional[bool] = None
+    bearing_uncertainty_deg: Optional[float] = None
+    track_id: Optional[str] = None
     rms: Optional[float] = None
     peak: Optional[float] = None
     duration_sec: Optional[float] = None

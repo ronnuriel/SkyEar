@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from dashboard.map_view import bearing_ray_rows
 from dashboard.station_view import (
     decision_display_state,
     decision_score_values,
@@ -11,6 +12,7 @@ from dashboard.station_view import (
     format_pct,
     health_badge_label,
     is_event_stale_for_fusion,
+    operator_action_label,
     spectrum_page_url,
     timing_summary,
 )
@@ -124,3 +126,25 @@ def test_decision_scores_include_combined_evidence():
 def test_stale_fusion_helper_uses_server_received_time():
     assert is_event_stale_for_fusion({"server_received_unix": 100.0}, fusion_window_sec=8.0, now=109.0)
     assert not is_event_stale_for_fusion({"server_received_unix": 100.0}, fusion_window_sec=8.0, now=107.0)
+
+
+def test_operator_action_label_is_field_ready_wording():
+    assert operator_action_label(0, {"status": "background"}) == "all clear"
+    assert operator_action_label(1, {"operator_label": "ml_drone_candidate"}) == "observe"
+    assert operator_action_label(3, {"status": "suspect"}) == "take cover"
+
+
+def test_bearing_ray_rows_include_endpoint():
+    rows = bearing_ray_rows(
+        [
+            {
+                "station_id": "s1",
+                "estimated_azimuth_deg": 90.0,
+                "station_location": {"latitude": 32.0, "longitude": 34.0},
+            }
+        ],
+        ray_length_m=100.0,
+    )
+
+    assert rows[0]["station_id"] == "s1"
+    assert rows[0]["ray_end_lon"] > rows[0]["lon"]

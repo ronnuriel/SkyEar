@@ -1,7 +1,8 @@
 from __future__ import annotations
 import time
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from shared.event_schema import AcousticEvent, FusedAlert, StationHeartbeat
+from server.auth import require_station_auth
 from server.database import db
 from server.fusion import fuse_events
 from server.ptz_dispatcher import dispatch_ptz_for_alert
@@ -24,7 +25,7 @@ def _stamp_receive(payload: AcousticEvent | StationHeartbeat) -> float:
     return server_received_unix
 
 @app.post("/events")
-def ingest_event(event: AcousticEvent):
+def ingest_event(event: AcousticEvent, _: None = Depends(require_station_auth)):
     _stamp_receive(event)
     db.add_event(event)
     alert = fuse_events(db.recent_events(limit=200))
@@ -39,7 +40,7 @@ def ingest_event(event: AcousticEvent):
     }
 
 @app.post("/stations/heartbeat")
-def ingest_heartbeat(heartbeat: StationHeartbeat):
+def ingest_heartbeat(heartbeat: StationHeartbeat, _: None = Depends(require_station_auth)):
     _stamp_receive(heartbeat)
     db.add_heartbeat(heartbeat)
     return {"ok": True, "server_received_unix": heartbeat.server_received_unix}
