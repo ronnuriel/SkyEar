@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import csv
 import json
+import shlex
+import sys
 from datetime import datetime, timezone
 
 import yaml
 
 from tools.field_session import append_field_note, create_field_session, save_debug_capture
 from tools.eval_field_session import evaluate_session
+from tools.mark_field_event import main as mark_field_event_main
+from tools.mark_field_event import parse_args as parse_mark_field_event_args
 
 
 def test_start_field_session_creates_expected_files(tmp_path):
@@ -55,7 +59,55 @@ def test_mark_field_event_appends_valid_notes_row(tmp_path):
     assert rows[0]["distance_m"] == "50"
     assert rows[0]["drone_model"] == "DJI_Neo"
     assert rows[0]["bearing_deg"] == "12.5"
+    assert "timestamp" in rows[0]
+    assert "timestamp_unix" not in rows[0]
+    assert "ground_truth_bearing_deg" not in rows[0]
     assert rows[0]["note"] == "hover 30 sec north"
+
+
+def test_mark_field_event_cli_bearing_deg_writes_canonical_field(tmp_path, monkeypatch):
+    session_dir = create_field_session(root=tmp_path, session_id="field_cli_bearing")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "skyear-mark-field-event",
+            "--session",
+            str(session_dir),
+            "--label",
+            "drone",
+            "--bearing-deg",
+            "42",
+        ],
+    )
+
+    mark_field_event_main()
+
+    rows = list(csv.DictReader((session_dir / "notes.csv").open("r", encoding="utf-8", newline="")))
+    assert rows[0]["bearing_deg"] == "42.0"
+    assert "ground_truth_bearing_deg" not in rows[0]
+
+
+def test_mark_field_event_cli_ground_truth_bearing_alias_writes_canonical_field(tmp_path, monkeypatch):
+    session_dir = create_field_session(root=tmp_path, session_id="field_cli_alias")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "skyear-mark-field-event",
+            "--session",
+            str(session_dir),
+            "--label",
+            "drone",
+            "--ground-truth-bearing-deg",
+            "90",
+        ],
+    )
+
+    mark_field_event_main()
+
+    rows = list(csv.DictReader((session_dir / "notes.csv").open("r", encoding="utf-8", newline="")))
+    assert rows[0]["bearing_deg"] == "90.0"
 
 
 def test_eval_field_session_handles_empty_no_drone_session(tmp_path):
@@ -91,6 +143,52 @@ def test_eval_field_session_computes_candidate_run2_by_distance(tmp_path):
     assert distance["candidate_run3"] is False
     assert distance["detection_delay_sec"] == 1.0
     assert distance["max_ml"] == 0.96
+
+
+def test_eval_field_session_reads_old_timestamp_and_ground_truth_bearing(tmp_path):
+    session_dir = create_field_session(root=tmp_path, session_id="field_legacy")
+    (session_dir / "notes.csv").write_text(
+        "timestamp_unix,label,distance_m,ground_truth_bearing_deg,note\n"
+        "1000,drone,50,30,legacy note\n",
+        encoding="utf-8",
+    )
+    rows = [
+        {
+            "timestamp": 1001.0,
+            "operator_label": "ml_drone_candidate",
+            "estimated_azimuth_deg": 35.0,
+            "ml_drone_pct": 0.9,
+        },
+        {
+            "timestamp": 1002.0,
+            "operator_label": "ml_drone_candidate",
+            "estimated_azimuth_deg": 33.0,
+            "ml_drone_pct": 0.95,
+        },
+    ]
+    history_path = session_dir / "stations" / "station_001_history.jsonl"
+    with history_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+    summary = evaluate_session(session_dir)
+    distance = summary["distance_summary"]["50"]
+
+    assert distance["candidate_run2"] is True
+    assert distance["detection_delay_sec"] == 1.0
+    assert distance["bearing_error_deg_median"] == 4.0
+
+
+def test_field_alpha_printed_mark_command_is_cli_compatible(monkeypatch):
+    script = open("scripts/field_alpha_check.sh", encoding="utf-8").read()
+    command = next(line.strip() for line in script.splitlines() if "skyear-mark-field-event" in line and "--bearing-deg" in line)
+    command = command.replace("field_sessions/<session_id>", "field_sessions/example")
+    monkeypatch.setattr(sys, "argv", shlex.split(command))
+
+    args = parse_mark_field_event_args()
+
+    assert args.bearing_deg == 0.0
+    assert args.label == "drone"
 
 
 def test_save_debug_capture_copies_state_and_recent_history(tmp_path):

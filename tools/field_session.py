@@ -18,13 +18,11 @@ from tools.eval_manifest_dataset import _is_alert, _is_candidate, _is_strong
 FIELD_LABELS = {"drone", "background", "helicopter", "wind", "vehicle", "unknown"}
 NOTES_FIELDNAMES = [
     "timestamp",
-    "timestamp_unix",
     "iso_time",
     "label",
     "distance_m",
     "drone_model",
     "bearing_deg",
-    "ground_truth_bearing_deg",
     "maneuver",
     "station_id",
     "note",
@@ -104,13 +102,11 @@ def append_field_note(
     bearing_value = bearing_deg if bearing_deg is not None else ground_truth_bearing_deg
     row = {
         "timestamp": timestamp_unix,
-        "timestamp_unix": timestamp_unix,
         "iso_time": datetime.fromtimestamp(timestamp_unix, timezone.utc).isoformat(),
         "label": label,
         "distance_m": distance_m,
         "drone_model": drone_model,
         "bearing_deg": bearing_value,
-        "ground_truth_bearing_deg": bearing_value,
         "maneuver": maneuver,
         "station_id": station_id,
         "note": note,
@@ -169,7 +165,11 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _timestamp(row: dict[str, Any]) -> float | None:
-    return _float_or_none(row.get("timestamp_unix") or row.get("timestamp") or row.get("created_unix"))
+    return _float_or_none(row.get("timestamp") or row.get("timestamp_unix") or row.get("created_unix"))
+
+
+def _field_event_timestamp(row: dict[str, Any]) -> float | None:
+    return _float_or_none(row.get("field_event_timestamp") or row.get("field_event_timestamp_unix"))
 
 
 def _max_run(flags: list[bool]) -> int:
@@ -218,10 +218,13 @@ def assign_rows_to_field_notes(
                 break
         merged = dict(row)
         if matched is not None:
-            for key in ("label", "distance_m", "drone_model", "bearing_deg", "ground_truth_bearing_deg", "maneuver", "note"):
+            for key in ("label", "distance_m", "drone_model", "maneuver", "note"):
                 if matched.get(key) not in (None, ""):
                     merged[key] = matched.get(key)
-            merged["field_event_timestamp_unix"] = _timestamp(matched)
+            bearing = matched.get("bearing_deg") or matched.get("ground_truth_bearing_deg")
+            if bearing not in (None, ""):
+                merged["bearing_deg"] = bearing
+            merged["field_event_timestamp"] = _timestamp(matched)
         assigned.append(merged)
     return assigned
 
@@ -246,7 +249,10 @@ def field_session_summary(
         alert_flags = [_is_alert(row) for row in ordered]
         drone_rows = [row for row in ordered if str(row.get("label") or "").lower() == "drone"]
         first_candidate_time = next((_timestamp(row) for row in ordered if _is_candidate(row)), None)
-        field_start = _timestamp(drone_rows[0]) if drone_rows else None
+        field_start_values = [
+            value for value in (_field_event_timestamp(row) or _timestamp(row) for row in drone_rows) if value is not None
+        ]
+        field_start = min(field_start_values) if field_start_values else None
         bearing_errors = []
         for row in ordered:
             truth = _float_or_none(row.get("ground_truth_bearing_deg") or row.get("bearing_deg"))

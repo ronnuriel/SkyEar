@@ -387,6 +387,7 @@ skyear-mark-field-event \
   --label drone \
   --distance-m 50 \
   --drone-model DJI_Neo \
+  --bearing-deg 0 \
   --note "hover 30 sec north"
 
 skyear-save-debug-capture \
@@ -398,6 +399,8 @@ skyear-eval-field-session \
   --session field_sessions/<session_id> \
   --output-json field_sessions/<session_id>/reports/eval_summary.json
 ```
+
+New `notes.csv` files use `timestamp` and `bearing_deg`. Older notes with `timestamp_unix` or `ground_truth_bearing_deg` are still supported by the evaluator.
 
 ## Security
 

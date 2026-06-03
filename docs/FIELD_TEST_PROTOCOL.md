@@ -119,6 +119,7 @@ For each run, write notes for:
 - Mark each ground-truth event with `skyear-mark-field-event`.
 - Use labels: `drone`, `background`, `helicopter`, `wind`, `vehicle`, or `unknown`.
 - Include distance, drone model, maneuver, bearing, and notes when known.
+- New `notes.csv` files use `timestamp` and `bearing_deg`. Older `timestamp_unix` and `ground_truth_bearing_deg` columns are still supported.
 - Keep labels conservative. If unsure, use `unknown`.
 - Do not relabel after seeing detector output unless you also preserve the original note.
 - Keep raw candidate WAVs and metadata sidecars together with the session folder.
@@ -128,7 +129,7 @@ For each run, write notes for:
 ```bash
 skyear-start-field-session --location "test field north" --station-id station_001 --drone-model DJI_Neo
 skyear-mark-field-event --session field_sessions/<session_id> --label background --note "2 min no-drone baseline"
-skyear-mark-field-event --session field_sessions/<session_id> --label drone --distance-m 50 --drone-model DJI_Neo --note "hover 30 sec north"
+skyear-mark-field-event --session field_sessions/<session_id> --label drone --distance-m 50 --drone-model DJI_Neo --bearing-deg 0 --note "hover 30 sec north"
 skyear-save-debug-capture --seconds 30 --label unknown --note "manual capture"
 skyear-eval-field-session --session field_sessions/<session_id>
 ```
