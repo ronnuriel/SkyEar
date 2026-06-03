@@ -1,0 +1,1 @@
+"""Packaged SkyEar dataset metadata."""

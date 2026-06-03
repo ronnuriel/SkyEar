@@ -1,0 +1,139 @@
+datasets:
+  - dataset_id: droneaudioset_hf
+    display_name: DroneAudioSet
+    source_type: huggingface
+    source_ref: ahlab-drone-project/DroneAudioSet
+    download_method: huggingface_datasets
+    local_dir: data/datasets/droneaudioset_hf
+    license: unknown
+    license_url: null
+    license_notes: Review Hugging Face dataset card before redistribution or training.
+    citation: null
+    label_schema: path_metadata
+    label_mapping:
+      drone-only: drone
+      background: background
+    metadata_parser: droneaudioset
+    expected_audio_format: wav/flac/mp3 or Hugging Face Audio feature
+    source_priority: 10
+    use_for: [benchmark, training_candidate, distance_eval]
+    safety_notes: Public dataset benchmark only; not operational validation.
+    status: needs_license_review
+
+  - dataset_id: drone_audio_detection_samples_hf
+    display_name: Drone audio detection samples
+    source_type: huggingface
+    source_ref: geronimobasso/drone-audio-detection-samples
+    download_method: huggingface_datasets
+    local_dir: data/datasets/drone_audio_detection_samples_hf
+    license: unknown
+    license_url: null
+    license_notes: Review Hugging Face dataset card before redistribution or training.
+    citation: null
+    label_schema: binary
+    label_mapping:
+      "0": background
+      "1": drone
+      not_drone: background
+      drone: drone
+    metadata_parser: dads_hf
+    expected_audio_format: wav/flac/mp3 or Hugging Face Audio feature
+    source_priority: 20
+    use_for: [benchmark, training_candidate, false_positive_eval]
+    safety_notes: Public dataset benchmark only; not operational validation.
+    status: needs_license_review
+
+  - dataset_id: drone_detection_thesis_github
+    display_name: Drone Detection Thesis Dataset
+    source_type: github
+    source_ref: DroneDetectionThesis/Drone-detection-dataset
+    download_method: git_clone
+    local_dir: data/datasets/drone_detection_thesis_github
+    license: unknown
+    license_url: null
+    license_notes: Review repository license before use.
+    citation: null
+    label_schema: path_metadata
+    label_mapping: {}
+    metadata_parser: generic
+    expected_audio_format: wav/flac/mp3
+    source_priority: 30
+    use_for: [benchmark, training_candidate]
+    safety_notes: Public dataset benchmark only; not operational validation.
+    status: needs_license_review
+
+  - dataset_id: sara_alemadi_github
+    display_name: Sara Alemadi Drone Audio Dataset
+    source_type: github
+    source_ref: saraalemadi/DroneAudioDataset
+    download_method: git_clone
+    local_dir: data/datasets/sara_alemadi_github
+    license: unknown
+    license_url: null
+    license_notes: Review repository license before use.
+    citation: null
+    label_schema: binary_or_multiclass_path
+    label_mapping: {}
+    metadata_parser: alemadi
+    expected_audio_format: wav/flac/mp3
+    source_priority: 40
+    use_for: [benchmark, training_candidate, false_positive_eval]
+    safety_notes: Public dataset benchmark only; not operational validation.
+    status: needs_license_review
+
+  - dataset_id: acoustic_uav_github
+    display_name: Acoustic UAV Identification
+    source_type: github
+    source_ref: pcasabianca/Acoustic-UAV-Identification
+    download_method: git_clone
+    local_dir: data/datasets/acoustic_uav_github
+    license: unknown
+    license_url: null
+    license_notes: Review repository license and data availability before use.
+    citation: null
+    label_schema: path_metadata
+    label_mapping: {}
+    metadata_parser: acoustic_uav
+    expected_audio_format: wav/flac/mp3
+    source_priority: 50
+    use_for: [benchmark, training_candidate]
+    safety_notes: Public dataset benchmark only; not operational validation.
+    status: needs_license_review
+
+  - dataset_id: bowony_github
+    display_name: BowonY drone audio detection data
+    source_type: github
+    source_ref: BowonY/drone-audio-detection
+    download_method: git_clone_branch_develop
+    local_dir: data/datasets/bowony_github
+    license: unknown
+    license_url: null
+    license_notes: Review repository license before use.
+    citation: null
+    label_schema: path_metadata
+    label_mapping: {}
+    metadata_parser: bowony
+    expected_audio_format: wav/flac/mp3
+    source_priority: 60
+    use_for: [benchmark, training_candidate, false_positive_eval]
+    safety_notes: Public dataset benchmark only; not operational validation.
+    status: needs_license_review
+
+  - dataset_id: kaggle_yehiel_levi
+    display_name: Yehiel Levi audio drone sound detection
+    source_type: kaggle
+    source_ref: yehiellevi/audio-drone-sound-detection
+    download_method: kaggle_optional
+    local_dir: data/datasets/kaggle_yehiel_levi
+    license: unknown
+    license_url: null
+    license_notes: Requires Kaggle credentials and license review.
+    citation: null
+    label_schema: path_metadata
+    label_mapping: {}
+    metadata_parser: generic
+    expected_audio_format: wav/flac/mp3
+    source_priority: 70
+    use_for: [benchmark, false_positive_eval]
+    safety_notes: Public dataset benchmark only; not operational validation.
+    status: manual_download_required

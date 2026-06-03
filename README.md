@@ -372,6 +372,66 @@ skyear-eval-manifest \
   --output-json reports/eval_summary.json
 ```
 
+## Dataset Hub And Offline Benchmarks
+
+Raw public datasets live under `data/datasets/` and are ignored by Git. Track only registry, manifests, reports, and code. Public datasets are useful for engineering benchmarks and training candidates, but they are not operational validation by themselves.
+
+List and validate registered sources:
+
+```bash
+skyear-datasets list
+skyear-datasets validate
+```
+
+Download or prepare a registered source:
+
+```bash
+skyear-download-datasets --dataset drone_audio_detection_samples_hf
+```
+
+Build a registry-backed manifest:
+
+```bash
+skyear-build-manifest \
+  --registry data/dataset_registry.yaml \
+  --dataset drone_audio_detection_samples_hf \
+  --verify-audio \
+  --output data/manifests/all_sources_manifest.csv
+```
+
+Run the station detector offline over a manifest:
+
+```bash
+skyear-stream-manifest \
+  --manifest data/manifests/all_sources_manifest.csv \
+  --config configs/config_station.yaml \
+  --mode offline \
+  --window-sec 1.0 \
+  --save-report reports/manifest_eval.csv
+```
+
+Evaluate one WAV:
+
+```bash
+skyear-eval-audio \
+  --wav path/to/file.wav \
+  --config configs/config_station.yaml \
+  --label unknown \
+  --save-report reports/single_wav.csv
+```
+
+Summarize benchmark output and build leakage-safe splits:
+
+```bash
+skyear-summarize-benchmark \
+  --report reports/manifest_eval.csv \
+  --output reports/benchmark_summary.json
+
+skyear-build-training-splits \
+  --manifest data/manifests/all_sources_manifest.csv \
+  --output-dir data/manifests
+```
+
 ## Field Test Sessions
 
 Use the field-session tools for engineering dry-runs and labeled data collection. Start with the full checklist in [docs/FIELD_TEST_PROTOCOL.md](docs/FIELD_TEST_PROTOCOL.md).

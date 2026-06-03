@@ -216,3 +216,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SkyEar datasets and field audio
+data/*
+!data/__init__.py
+!data/README.md
+!data/dataset_registry.yaml
+!data/manifests/
+!data/manifests/*.csv
+!data/manifests/*.json
+!data/manifests/*.jsonl
+data/datasets/
+data/raw/
+field_sessions/*/recordings/
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+!reports/
+!reports/**/*.csv
+!reports/**/*.json

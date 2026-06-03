@@ -65,9 +65,16 @@ skyear-start-field-session = "tools.start_field_session:main"
 skyear-mark-field-event = "tools.mark_field_event:main"
 skyear-eval-field-session = "tools.eval_field_session:main"
 skyear-save-debug-capture = "tools.save_debug_capture:main"
+skyear-datasets = "tools.dataset_registry:main"
+skyear-download-datasets = "tools.download_datasets:main"
+skyear-stream-manifest = "tools.stream_manifest_dataset:main"
+skyear-eval-audio = "tools.eval_audio:main"
+skyear-summarize-benchmark = "tools.summarize_benchmark:main"
+skyear-build-training-splits = "tools.build_training_splits:main"
 
 [tool.setuptools.packages.find]
-include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*"]
+include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*", "data*"]
 
 [tool.setuptools.package-data]
 configs = ["*.yaml"]
+data = ["dataset_registry.yaml", "README.md"]
