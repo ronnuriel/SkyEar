@@ -15,6 +15,7 @@ from tools.dataset_registry import DEFAULT_REGISTRY, dataset_by_id, validate_reg
 from tools.eval_audio import main as eval_audio_main
 from tools.stream_manifest_dataset import run_manifest, run_single_wav
 from tools.summarize_benchmark import summarize_report
+from tools.download_datasets import download_dataset
 
 
 def _write_tone(path: Path, sample_rate: int = 16000, duration_sec: float = 2.0) -> None:
@@ -36,6 +37,55 @@ def test_dataset_registry_validates_seed_file():
     assert validate_registry(DEFAULT_REGISTRY) == []
     dataset = dataset_by_id("droneaudioset_hf", DEFAULT_REGISTRY)
     assert dataset["metadata_parser"] == "droneaudioset"
+
+
+def test_dataset_registry_resolves_aliases_and_lists_available_on_missing():
+    assert dataset_by_id("dads", DEFAULT_REGISTRY)["dataset_id"] == "drone_audio_detection_samples_hf"
+    assert dataset_by_id("svanstrom", DEFAULT_REGISTRY)["dataset_id"] == "drone_detection_thesis_github"
+
+    try:
+        dataset_by_id("missing_dataset", DEFAULT_REGISTRY)
+    except KeyError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected KeyError")
+
+    assert "dataset ids:" in message
+    assert "aliases:" in message
+    assert "dads->drone_audio_detection_samples_hf" in message
+
+
+def test_hf_download_dry_run_accepts_small_split_options(tmp_path, capsys):
+    dataset = dict(dataset_by_id("droneaudioset_hf", DEFAULT_REGISTRY))
+    dataset["local_dir"] = str(tmp_path / "droneaudioset")
+
+    target = download_dataset(
+        dataset,
+        hf_config="drone-only",
+        split="train_001",
+        max_examples=2,
+        dry_run=True,
+    )
+
+    out = capsys.readouterr().out
+    assert target == tmp_path / "droneaudioset"
+    assert "config=drone-only" in out
+    assert "split=train_001" in out
+    assert "max_examples=2" in out
+
+
+def test_hf_download_refuses_large_materialization_without_force(tmp_path):
+    dataset = dict(dataset_by_id("droneaudioset_hf", DEFAULT_REGISTRY))
+    dataset["local_dir"] = str(tmp_path / "droneaudioset")
+
+    try:
+        download_dataset(dataset, dry_run=True)
+    except SystemExit as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected SystemExit")
+
+    assert "Refusing to materialize a full Hugging Face dataset" in message
 
 
 def test_manifest_parses_droneaudioset_path_metadata():
@@ -142,8 +192,37 @@ def test_benchmark_summary_counts_false_runs():
     summary = summarize_report(rows)
 
     assert summary["overall"]["candidate_run2"] == 1
+    assert summary["overall"]["candidate_any_files"] == 1
+    assert summary["overall"]["false_candidate_files"] == 1
+    assert summary["overall"]["false_candidate_single_spike_files"] == 0
+    assert summary["overall"]["false_candidate_run2_files"] == 1
+    assert summary["overall"]["false_candidate_run3_files"] == 0
+    assert summary["overall"]["false_alert_files"] == 0
     assert summary["overall"]["false_candidate_events_per_hour"] > 0
+    assert summary["overall"]["false_candidate_windows_per_hour"] > summary["overall"]["false_candidate_events_per_hour"]
     assert summary["overall"]["confusion_operator_label"]["ml_drone_candidate"] == 2
+
+
+def test_benchmark_summary_separates_single_spike_false_candidate():
+    rows = [
+        {"file_path": "bg.wav", "dataset_id": "synthetic", "label": "background", "window_idx": "0", "operator_label": "background"},
+        {
+            "file_path": "bg.wav",
+            "dataset_id": "synthetic",
+            "label": "background",
+            "window_idx": "1",
+            "operator_label": "ml_drone_candidate",
+        },
+        {"file_path": "bg.wav", "dataset_id": "synthetic", "label": "background", "window_idx": "2", "operator_label": "background"},
+    ]
+
+    summary = summarize_report(rows)
+
+    assert summary["overall"]["false_candidate_files"] == 1
+    assert summary["overall"]["false_candidate_single_spike_files"] == 1
+    assert summary["overall"]["false_candidate_run2_files"] == 0
+    assert summary["overall"]["false_candidate_run3_files"] == 0
+    assert summary["overall"]["false_alert_file_rate"] == 0.0
 
 
 def test_split_builder_does_not_split_same_source_file():

@@ -27,6 +27,12 @@ REQUIRED_FIELDS = {
     "status",
 }
 VALID_STATUSES = {"active", "needs_license_review", "manual_download_required", "deprecated"}
+DATASET_ALIASES = {
+    "dads_hf": "drone_audio_detection_samples_hf",
+    "dads": "drone_audio_detection_samples_hf",
+    "svanstrom": "drone_detection_thesis_github",
+    "svanstrom_drone_detection": "drone_detection_thesis_github",
+}
 
 
 def load_registry(path: str | Path = DEFAULT_REGISTRY) -> dict[str, Any]:
@@ -46,11 +52,22 @@ def list_datasets(path: str | Path = DEFAULT_REGISTRY) -> list[dict[str, Any]]:
     return list(load_registry(path).get("datasets", []))
 
 
+def resolve_dataset_id(dataset_id: str) -> str:
+    return DATASET_ALIASES.get(str(dataset_id), str(dataset_id))
+
+
+def available_dataset_ids_and_aliases(path: str | Path = DEFAULT_REGISTRY) -> str:
+    dataset_ids = sorted(str(dataset.get("dataset_id")) for dataset in list_datasets(path))
+    aliases = sorted(f"{alias}->{target}" for alias, target in DATASET_ALIASES.items())
+    return "dataset ids: " + ", ".join(dataset_ids) + "\naliases: " + ", ".join(aliases)
+
+
 def dataset_by_id(dataset_id: str, path: str | Path = DEFAULT_REGISTRY) -> dict[str, Any]:
+    resolved_id = resolve_dataset_id(dataset_id)
     for dataset in list_datasets(path):
-        if dataset.get("dataset_id") == dataset_id:
+        if dataset.get("dataset_id") == resolved_id:
             return dataset
-    raise KeyError(f"dataset not found: {dataset_id}")
+    raise KeyError(f"dataset not found: {dataset_id}\n{available_dataset_ids_and_aliases(path)}")
 
 
 def validate_registry(path: str | Path = DEFAULT_REGISTRY) -> list[str]:
@@ -123,7 +140,10 @@ def main() -> None:
         print("registry OK")
         return
     if args.command == "info":
-        dataset = dataset_by_id(args.dataset_id, args.registry)
+        try:
+            dataset = dataset_by_id(args.dataset_id, args.registry)
+        except KeyError as exc:
+            raise SystemExit(str(exc).strip("'")) from None
         print(yaml.safe_dump(dataset, sort_keys=False).strip())
 
 

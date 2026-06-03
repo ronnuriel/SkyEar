@@ -60,6 +60,8 @@ Console commands such as `skyear-station` and `skyear-server` are available insi
 source /tmp/skyear_git_install_test/bin/activate
 ```
 
+When copying command blocks into `zsh`, paste only the command lines. If interactive comments are disabled, shell comment lines that start with `#` can be treated as commands instead of comments.
+
 ## Install From A Local Checkout
 
 ```bash
@@ -386,7 +388,31 @@ skyear-datasets validate
 Download or prepare a registered source:
 
 ```bash
-skyear-download-datasets --dataset drone_audio_detection_samples_hf
+skyear-download-datasets --dataset drone_audio_detection_samples_hf --metadata-only --max-examples 20
+```
+
+For a small DroneAudioSet Hugging Face smoke test, use an explicit config, split, and example limit:
+
+```bash
+skyear-download-datasets \
+  --dataset droneaudioset_hf \
+  --hf-config drone-only \
+  --split train_001 \
+  --max-examples 20
+```
+
+SkyEar refuses to materialize a full Hugging Face dataset unless you pass `--force-large`. For very large sources, prefer `--metadata-only`, `--streaming-export`, or a small `--max-examples` split first.
+
+Canonical dataset IDs and useful aliases:
+
+```text
+droneaudioset_hf
+drone_audio_detection_samples_hf  aliases: dads_hf, dads
+drone_detection_thesis_github     aliases: svanstrom, svanstrom_drone_detection
+sara_alemadi_github
+acoustic_uav_github
+bowony_github
+kaggle_yehiel_levi
 ```
 
 Build a registry-backed manifest:
