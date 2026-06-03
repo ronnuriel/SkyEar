@@ -14,6 +14,13 @@ from station.beamforming import BeamformingResult, estimate_bearing
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
 from station.hf_detector import DEFAULT_MODEL_ID, HFDetector
+from station.local_monitor import (
+    atomic_write_json,
+    build_local_monitor_snapshot,
+    history_row_from_event,
+    local_monitor_paths,
+    write_local_monitor_snapshot,
+)
 from station.raw_recorder import RawRingBufferRecorder
 from station.spectrum import compute_harmonic_lines, compute_spectrogram_summary, compute_spectrum_summary
 
@@ -146,6 +153,48 @@ def _is_local_candidate(event: AcousticEvent) -> bool:
     )
 
 
+def _write_local_monitor(
+    *,
+    enabled: bool,
+    state_path: Path,
+    history_path: Path,
+    event: AcousticEvent,
+    mono: np.ndarray,
+    waveform_points: int,
+    spectrum: dict[str, Any],
+    spectrogram: dict[str, Any],
+    harmonic_lines: list[dict[str, Any]],
+    hf_result: Any,
+    server_state: dict[str, Any],
+    history_max_rows: int | None,
+    updated_unix: float,
+    append_history: bool = True,
+) -> None:
+    if not enabled:
+        return
+    snapshot = build_local_monitor_snapshot(
+        event=event,
+        mono=mono,
+        waveform_points=waveform_points,
+        spectrum=spectrum,
+        spectrogram=spectrogram,
+        harmonic_lines=harmonic_lines,
+        hf_result=hf_result,
+        server_state=server_state,
+        updated_unix=updated_unix,
+    )
+    if append_history:
+        write_local_monitor_snapshot(
+            state_path=state_path,
+            history_path=history_path,
+            snapshot=snapshot,
+            history_row=history_row_from_event(event),
+            history_max_rows=history_max_rows,
+        )
+        return
+    atomic_write_json(state_path, snapshot)
+
+
 def run_hf_smoke_test(cfg: dict[str, Any]) -> int:
     audio_cfg = cfg["audio"]
     hf_cfg = cfg.get("hf", {})
@@ -193,6 +242,7 @@ def main():
     heartbeat_cfg = cfg.get("heartbeat", {})
     raw_cfg = cfg.get("raw_recording", {})
     beamforming_cfg = cfg.get("beamforming", {})
+    local_monitor_cfg = cfg.get("local_monitor", {})
     coverage_radius_m = station_cfg.get("coverage_radius_m")
 
     detector_state = StationDetectorState(_detector_config(det_cfg, stability_cfg, hf_cfg))
@@ -206,6 +256,7 @@ def main():
     last_send = 0.0
     last_heartbeat = 0.0
     last_error = None
+    last_heartbeat_error = None
     heartbeat_enabled = bool(heartbeat_cfg.get("enabled", True))
     heartbeat_interval = float(heartbeat_cfg.get("interval_sec", 5.0))
     heartbeat_url = str(heartbeat_cfg.get("url") or heartbeat_url_from_events_url(server_cfg["url"]))
@@ -232,6 +283,11 @@ def main():
             buffer_seconds=float(raw_cfg.get("buffer_seconds", 20.0)),
             cooldown_seconds=float(raw_cfg.get("cooldown_seconds", 5.0)),
         )
+    local_monitor_enabled = bool(local_monitor_cfg.get("enabled", True))
+    local_state_path, local_history_path = local_monitor_paths(cfg, str(station_cfg["station_id"]))
+    local_waveform_points = int(local_monitor_cfg.get("waveform_points", 1200))
+    local_history_max_rows = local_monitor_cfg.get("history_max_rows")
+    local_history_max_rows = None if local_history_max_rows is None else int(local_history_max_rows)
 
     print("Starting station:", station_cfg["station_id"])
 
@@ -403,6 +459,32 @@ def main():
             f"agree={event.channel_agreement_count}/{event.channel_count} "
             f"az={event.estimated_azimuth_deg} beam={event.beam_score}{hf_mode_note}"
         )
+        local_server_state = {
+            "events_url": server_cfg["url"],
+            "heartbeat_url": heartbeat_url,
+            "last_send_error": last_error,
+            "last_heartbeat_error": last_heartbeat_error,
+            "last_send_unix": last_send if last_send else None,
+            "last_heartbeat_unix": last_heartbeat if last_heartbeat else None,
+        }
+        try:
+            _write_local_monitor(
+                enabled=local_monitor_enabled,
+                state_path=local_state_path,
+                history_path=local_history_path,
+                event=event,
+                mono=mono,
+                waveform_points=local_waveform_points,
+                spectrum=spectrum,
+                spectrogram=spectrogram,
+                harmonic_lines=harmonic_lines,
+                hf_result=last_hf_result,
+                server_state=local_server_state,
+                history_max_rows=local_history_max_rows,
+                updated_unix=now,
+            )
+        except Exception as e:
+            print("[WARN] local monitor write failed:", e)
         if raw_recorder is not None and _is_local_candidate(event):
             saved = raw_recorder.save_candidate(
                 station_id=event.station_id,
@@ -422,6 +504,27 @@ def main():
                 last_error = str(e)
                 print("[WARN] send failed:", e)
             last_send = now
+            local_server_state["last_send_error"] = last_error
+            local_server_state["last_send_unix"] = last_send
+            try:
+                _write_local_monitor(
+                    enabled=local_monitor_enabled,
+                    state_path=local_state_path,
+                    history_path=local_history_path,
+                    event=event,
+                    mono=mono,
+                    waveform_points=local_waveform_points,
+                    spectrum=spectrum,
+                    spectrogram=spectrogram,
+                    harmonic_lines=harmonic_lines,
+                    hf_result=last_hf_result,
+                    server_state=local_server_state,
+                history_max_rows=local_history_max_rows,
+                updated_unix=time.time(),
+                append_history=False,
+            )
+            except Exception as e:
+                print("[WARN] local monitor write failed:", e)
 
         if heartbeat_enabled and now - last_heartbeat >= heartbeat_interval:
             heartbeat = StationHeartbeat(
@@ -453,9 +556,32 @@ def main():
             try:
                 heartbeat_payload = heartbeat.model_dump(mode="json")
                 _post_payload(heartbeat_url, heartbeat_payload, server_cfg, timeout=1.5)
+                last_heartbeat_error = None
             except Exception as e:
+                last_heartbeat_error = str(e)
                 print("[WARN] heartbeat failed:", e)
             last_heartbeat = now
+            local_server_state["last_heartbeat_error"] = last_heartbeat_error
+            local_server_state["last_heartbeat_unix"] = last_heartbeat
+            try:
+                _write_local_monitor(
+                    enabled=local_monitor_enabled,
+                    state_path=local_state_path,
+                    history_path=local_history_path,
+                    event=event,
+                    mono=mono,
+                    waveform_points=local_waveform_points,
+                    spectrum=spectrum,
+                    spectrogram=spectrogram,
+                    harmonic_lines=harmonic_lines,
+                    hf_result=last_hf_result,
+                    server_state=local_server_state,
+                    history_max_rows=local_history_max_rows,
+                    updated_unix=time.time(),
+                    append_history=False,
+                )
+            except Exception as e:
+                print("[WARN] local monitor write failed:", e)
 
 if __name__ == "__main__":
     main()

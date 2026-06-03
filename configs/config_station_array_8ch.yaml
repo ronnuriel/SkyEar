@@ -86,3 +86,11 @@ server:
 heartbeat:
   enabled: true
   interval_sec: 5.0
+
+local_monitor:
+  enabled: true
+  directory: runtime/stations
+  state_path: runtime/stations/station_array_8ch_001_latest.json
+  history_path: runtime/stations/station_array_8ch_001_history.jsonl
+  waveform_points: 1200
+  history_max_rows: 2000
