@@ -228,6 +228,7 @@ data/*
 !data/manifests/*.jsonl
 data/datasets/
 data/raw/
+runtime/
 field_sessions/*/recordings/
 *.wav
 *.flac

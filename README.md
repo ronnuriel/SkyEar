@@ -131,6 +131,53 @@ PYTHONPATH=. python -m station.station_agent --config configs/config_station.yam
 PYTHONPATH=. streamlit run dashboard/app.py
 ```
 
+## Quick Start: Field Alpha
+
+Install the Field Alpha tag:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@v0.1.0-field-alpha"
+```
+
+Start the central server and dashboard:
+
+```bash
+skyear-server --host 0.0.0.0 --port 8080
+skyear-dashboard
+```
+
+Prepare a station config and choose the audio device:
+
+```bash
+skyear-copy-configs configs
+skyear-station --list-devices
+```
+
+Run one station:
+
+```bash
+skyear-station --config configs/config_station.yaml
+```
+
+Smoke-test the passive map layer:
+
+```bash
+bash scripts/map_smoke_test.sh
+```
+
+Run a Svanström benchmark after the dataset is present under `data/datasets/`:
+
+```bash
+skyear-run-benchmarks \
+  --dataset svanstrom \
+  --window-sec 1.0 \
+  --output-dir reports/svanstrom_field_alpha
+```
+
+For the full release checklist, see [docs/RELEASE_FIELD_ALPHA.md](docs/RELEASE_FIELD_ALPHA.md).
+
 ## Station Setup
 
 List audio devices:
