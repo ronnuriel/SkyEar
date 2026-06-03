@@ -52,7 +52,6 @@ all = [
 skyear-station = "station.station_agent:main"
 skyear-server = "server.cli:main"
 skyear-dashboard = "dashboard.cli:main_dashboard"
-skyear-spectrum = "dashboard.cli:main_spectrum"
 skyear-local-monitor = "dashboard.cli:main_local_monitor"
 skyear-copy-configs = "tools.copy_configs:main"
 skyear-check-server = "tools.check_server:main"

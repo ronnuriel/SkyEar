@@ -133,7 +133,13 @@ Terminal 2, one live station:
 skyear-station --config configs/config_station.yaml
 ```
 
-Terminal 3, local per-station monitor:
+Terminal 3, central operator dashboard:
+
+```bash
+skyear-dashboard
+```
+
+Optional, on the station computer only, local per-station monitor:
 
 ```bash
 skyear-local-monitor -- --state runtime/stations/station_001_latest.json --history runtime/stations/station_001_history.jsonl
@@ -143,18 +149,6 @@ If you are running from a source checkout, the helper script reads the monitor p
 
 ```bash
 scripts/run_station_monitor.sh configs/config_station.yaml
-```
-
-Terminal 4, central operator dashboard:
-
-```bash
-skyear-dashboard
-```
-
-Optional dedicated spectrum app:
-
-```bash
-skyear-spectrum -- --server.port 8502
 ```
 
 If running from source without installing console scripts, prefix the old commands with `PYTHONPATH=.`:
@@ -175,30 +169,40 @@ source .venv/bin/activate
 pip install "skyear[all] @ git+https://github.com/ronnuriel/SkyEar.git@v0.1.0-field-alpha"
 ```
 
-Start the central server and dashboard:
-
-```bash
-skyear-server --host 0.0.0.0 --port 8080
-skyear-dashboard
-```
-
-Prepare a station config and choose the audio device:
+Copy configs:
 
 ```bash
 skyear-copy-configs configs
+```
+
+Check microphones:
+
+```bash
 skyear-station --list-devices
 ```
 
-Run one station:
+Start the central server:
+
+```bash
+skyear-server --host 0.0.0.0 --port 8080
+```
+
+Start one station:
 
 ```bash
 skyear-station --config configs/config_station.yaml
 ```
 
-Smoke-test the passive map layer:
+Start the central dashboard:
 
 ```bash
-bash scripts/map_smoke_test.sh
+skyear-dashboard
+```
+
+Optional, on the station computer only, start the local station monitor:
+
+```bash
+skyear-local-monitor -- --state runtime/stations/station_001_latest.json --history runtime/stations/station_001_history.jsonl
 ```
 
 Run a Svanström benchmark after the dataset is present under `data/datasets/`:
@@ -375,8 +379,6 @@ The central dashboard shows:
 - Active tracks
 - Bearing cue rows
 - Operator action: `observe`, `take cover`, or `all clear`
-
-The dedicated spectrum app can be opened from each station card.
 
 ## Optional HF Advisory Model
 
@@ -605,6 +607,18 @@ skyear-simulate-geo-events \
   --station-a-lat 31.9955 --station-a-lon 34.0000 --station-a-bearing 0 \
   --station-b-lat 32.0000 --station-b-lon 34.0053 --station-b-bearing 270
 ```
+
+## Developer / Debug Tools
+
+The Field Alpha operator flow does not require a second Streamlit spectrum app. Use only `skyear-server`, `skyear-station`, `skyear-dashboard`, and optionally `skyear-local-monitor`.
+
+For developer debugging from a source checkout, the old station spectrum app is still available:
+
+```bash
+PYTHONPATH=. streamlit run dashboard/station_spectrum_app.py --server.port 8502
+```
+
+This app is not part of the Field Alpha field-operator startup flow and is not installed as a console command.
 
 ## Security
 

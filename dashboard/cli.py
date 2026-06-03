@@ -19,9 +19,5 @@ def main_dashboard() -> None:
     _run_streamlit("app.py")
 
 
-def main_spectrum() -> None:
-    _run_streamlit("station_spectrum_app.py")
-
-
 def main_local_monitor() -> None:
     _run_streamlit("local_station_app.py")

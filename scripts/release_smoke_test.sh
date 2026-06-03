@@ -10,7 +10,7 @@ python -m venv "$VENV_DIR"
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 python -m pip install --upgrade pip
-python -m pip install "$ROOT_DIR"/dist/skyear-*.whl
+python -m pip install --force-reinstall "$ROOT_DIR"/dist/skyear-*.whl
 
 mkdir -p "$TMP_DIR/empty"
 pushd "$TMP_DIR/empty" >/dev/null

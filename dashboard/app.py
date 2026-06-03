@@ -7,7 +7,6 @@ import streamlit as st
 
 from dashboard.map_view import bearing_ray_rows, render_passive_map
 from dashboard.station_view import (
-    external_spectrum_app_url,
     health_badge_label,
     is_event_stale_for_fusion,
     operator_action_label,
@@ -43,8 +42,6 @@ def _render_station_card(
     event: dict,
     health: dict | None,
     fusion_level: int,
-    server_url: str,
-    spectrum_app_url: str,
     show_inline_mini_spectrum: bool,
 ):
     metadata = event.get("metadata") or {}
@@ -97,8 +94,6 @@ def _render_station_card(
         detail_cols[2].metric("RMS", f"{float(event.get('rms') or 0.0):.4f}")
         detail_cols[3].metric("Duration", f"{float(event.get('duration_sec') or 0.0):.1f}s")
 
-        st.markdown(f"[Open Spectrum]({external_spectrum_app_url(station_id, server_url, spectrum_app_url)})")
-
         if show_inline_mini_spectrum:
             fig = plot_spectrum_figure(metadata, small=True)
             if fig is None:
@@ -150,7 +145,6 @@ refresh_sec = st.sidebar.number_input(
     step=0.5,
 )
 show_inline_mini_spectrum = st.sidebar.checkbox("Show inline mini spectrum", value=False)
-spectrum_app_url = st.sidebar.text_input("Spectrum app URL", value="http://localhost:8502")
 max_stations_per_row = int(
     st.sidebar.number_input("Max stations per row", min_value=1, max_value=4, value=3, step=1)
 )
@@ -221,8 +215,6 @@ try:
                     event,
                     health_by_station.get(station_id),
                     fusion_level,
-                    server_url,
-                    spectrum_app_url,
                     show_inline_mini_spectrum,
                 )
     if heartbeat_only:

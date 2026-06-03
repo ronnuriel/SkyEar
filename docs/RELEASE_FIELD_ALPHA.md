@@ -105,3 +105,21 @@ Copy configs and verify:
 skyear-copy-configs configs
 skyear-check-server --url http://127.0.0.1:8080
 ```
+
+## Field Alpha Operator Flow
+
+The Field Alpha field startup flow is intentionally small:
+
+```bash
+skyear-server --host 0.0.0.0 --port 8080
+skyear-station --config configs/config_station.yaml
+skyear-dashboard
+```
+
+Optional, on the station computer only:
+
+```bash
+skyear-local-monitor -- --state runtime/stations/station_001_latest.json --history runtime/stations/station_001_history.jsonl
+```
+
+The dedicated station spectrum app is a developer/debug tool only. It is not part of the Field Alpha operator flow.
