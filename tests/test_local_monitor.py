@@ -36,7 +36,15 @@ def _event() -> AcousticEvent:
         best_f0_hz=920,
         rms=0.03,
         peak=0.2,
-        metadata={"sample_rate": 44100, "hf_label": "drone"},
+        metadata={
+            "sample_rate": 44100,
+            "hf_label": "drone",
+            "calibration_loaded": True,
+            "calibration_file": "configs/array_calibration_station_001.json",
+            "channel_rms": [0.1, 0.2],
+            "channel_health": ["ok", "dropout"],
+            "bad_channels": [1],
+        },
     )
 
 
@@ -82,6 +90,8 @@ def test_local_monitor_payload_contains_event_audio_spectrum_spectrogram(tmp_pat
     assert snapshot["spectrum"] == spectrum
     assert snapshot["spectrogram"] == spectrogram
     assert snapshot["beam"]["beam_scan_deg"] == [0.0, 5.0]
+    assert snapshot["audio"]["calibration_loaded"] is True
+    assert snapshot["audio"]["channel_health"] == ["ok", "dropout"]
     assert "raw_audio" not in snapshot["audio"]
 
     state_path = tmp_path / "station_latest.json"

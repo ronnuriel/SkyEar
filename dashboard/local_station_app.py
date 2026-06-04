@@ -90,6 +90,28 @@ def _show_waveform(audio: dict[str, Any]) -> None:
     st.line_chart(pd.DataFrame({"amplitude": waveform}))
 
 
+def _show_channel_health(audio: dict[str, Any]) -> None:
+    rms = audio.get("channel_rms") or []
+    health = audio.get("channel_health") or []
+    with st.container(border=True):
+        st.markdown("#### Array calibration")
+        loaded = bool(audio.get("calibration_loaded"))
+        calibration_file = audio.get("calibration_file")
+        st.caption(f"calibration_loaded={loaded}" + (f" file={calibration_file}" if calibration_file else ""))
+        if not rms:
+            st.info("No channel RMS snapshot yet.")
+            return
+        df = pd.DataFrame(
+            {
+                "channel": [f"ch {idx + 1}" for idx in range(len(rms))],
+                "rms": [float(value or 0.0) for value in rms],
+                "health": [health[idx] if idx < len(health) else "unknown" for idx in range(len(rms))],
+            }
+        )
+        st.bar_chart(df.set_index("channel")[["rms"]])
+        st.dataframe(df, width="stretch", hide_index=True)
+
+
 def _show_spectrum(spectrum: dict[str, Any], harmonic_lines: list[dict[str, Any]]) -> None:
     freqs = spectrum.get("spectrum_freqs_hz") or []
     db = spectrum.get("spectrum_db") or []
@@ -240,6 +262,11 @@ def main() -> None:
     beam_cols[3].metric("Beam SNR", f"{float(beam.get('beam_snr_gain_db') or 0.0):.1f} dB" if beam.get("beam_snr_gain_db") is not None else "n/a")
     beam_cols[4].metric("Bearing stable", "yes" if beam.get("bearing_stable") else "no")
     beam_cols[5].metric("Server", "send failed" if server.get("last_send_error") else "ok")
+    st.caption(
+        "Bearing quality: "
+        f"{beam.get('bearing_quality') or 'n/a'}"
+        + (f" ({beam.get('bearing_reject_reason')})" if beam.get("bearing_reject_reason") else "")
+    )
     metadata = event.get("metadata") or {}
     lat = event.get("station_latitude") or metadata.get("latitude")
     lon = event.get("station_longitude") or metadata.get("longitude")
@@ -256,9 +283,13 @@ def main() -> None:
         else:
             st.caption(f"Bearing cue: {float(bearing):.0f}°")
 
-    tab_wave, tab_spec, tab_sgram, tab_history = st.tabs(["Waveform", "Spectrum", "Spectrogram", "Evidence History"])
+    tab_wave, tab_channels, tab_spec, tab_sgram, tab_history = st.tabs(
+        ["Waveform", "Channels", "Spectrum", "Spectrogram", "Evidence History"]
+    )
     with tab_wave:
         _show_waveform(snapshot["audio"])
+    with tab_channels:
+        _show_channel_health(snapshot["audio"])
     with tab_spec:
         _show_spectrum(snapshot["spectrum"], snapshot["harmonic_lines"])
     with tab_sgram:

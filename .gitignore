@@ -229,6 +229,8 @@ data/*
 data/datasets/
 data/raw/
 runtime/
+reports/sim/
+reports/sim_hard/
 field_sessions/*/recordings/
 *.wav
 *.flac

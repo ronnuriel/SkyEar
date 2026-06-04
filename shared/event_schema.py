@@ -79,6 +79,13 @@ class AcousticEvent(BaseModel):
     beam_confidence_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     beam_peak_to_median: Optional[float] = None
     beam_peak_to_second_peak: Optional[float] = None
+    second_peak_bearing_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    second_peak_ratio: Optional[float] = None
+    peak_ratio: Optional[float] = None
+    bearing_ambiguity_deg: Optional[float] = None
+    bearing_reliable: Optional[bool] = None
+    bearing_reject_reason: Optional[str] = None
+    bearing_quality: Optional[str] = None
     bearing_stable: Optional[bool] = None
     bearing_uncertainty_deg: Optional[float] = None
     track_id: Optional[str] = None

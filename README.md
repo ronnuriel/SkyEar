@@ -384,6 +384,115 @@ Expected demo behavior:
 - Two-station drone becomes stronger than single-station drone
 - Far unrelated stations are shown as separate local candidates or tracks
 
+## Synthetic Array And Two-Station Simulation
+
+Use this when you want to test 8-channel beamforming and map geolocation without real microphones.
+
+Generate a moving 8-channel drone-like WAV:
+
+```bash
+skyear-simulate-array-audio \
+  --profile field_8ch_r0_35m \
+  --sample-rate 48000 \
+  --duration-sec 20 \
+  --bearing-start-deg 300 \
+  --bearing-end-deg 60 \
+  --source-type harmonic_drone \
+  --f0 1200 \
+  --snr-db 20 \
+  --output reports/sim/moving_source_8ch.wav \
+  --truth reports/sim/moving_source_truth.csv
+```
+
+Evaluate beamforming against the truth CSV:
+
+```bash
+skyear-eval-array-audio \
+  --wav reports/sim/moving_source_8ch.wav \
+  --truth reports/sim/moving_source_truth.csv \
+  --config configs/config_station_array_8ch.yaml \
+  --window-sec 1.0 \
+  --output reports/sim/beam_eval.csv
+```
+
+Post a moving two-station geo simulation to the map:
+
+```bash
+skyear-simulate-moving-geo \
+  --server http://127.0.0.1:8080/events \
+  --station-a-lat 32.10350 \
+  --station-a-lon 34.80800 \
+  --station-b-lat 32.10420 \
+  --station-b-lon 34.80920 \
+  --path-start-lat 32.10520 \
+  --path-start-lon 34.80830 \
+  --path-end-lat 32.10540 \
+  --path-end-lon 34.81030 \
+  --steps 20
+```
+
+One-command synthetic smoke test:
+
+```bash
+bash scripts/synthetic_array_smoke_test.sh
+```
+
+Harder synthetic field-readiness test:
+
+```bash
+bash scripts/synthetic_array_hard_test.sh
+```
+
+The hard test runs clean audio plus low SNR, mic gain mismatch, mic position error, channel delay mismatch, dropout, multipath, and an interfering harmonic source. It creates `reports/sim/` automatically and writes:
+
+- `reports/sim/hard_test_summary.txt`
+- `reports/sim/hard_test_summary.csv`
+- `reports/sim/hard_test_summary.json`
+
+Use a different output directory when comparing runs:
+
+```bash
+bash scripts/synthetic_array_hard_test.sh --output-dir reports/sim/run_001
+```
+
+The summary includes:
+
+```text
+case, median_error_deg, p90_error_deg, detection_rate, median_confidence, reliable_rate
+```
+
+Beamforming output also includes reliability diagnostics: `second_peak_bearing_deg`, `second_peak_ratio`, `peak_ratio`, `bearing_ambiguity_deg`, `bearing_reliable`, and `bearing_reject_reason`. If the bearing is unreliable, the station can still send the acoustic detection, but precise bearing is marked poor/unreliable and should not drive map geolocation.
+
+Useful knobs for making the synthetic WAV less ideal:
+
+```bash
+skyear-simulate-array-audio \
+  --snr-db 0 \
+  --mic-gain-jitter-db 3 \
+  --mic-position-jitter-cm 5 \
+  --channel-delay-jitter-us 100 \
+  --drop-channel 3 \
+  --permute-channels random \
+  --reflection-count 3 \
+  --reflection-delay-ms 5,12,25 \
+  --reflection-gain-db=-6,-10,-15 \
+  --interferer-type harmonic \
+  --interferer-bearing-deg 180 \
+  --interferer-f0 1000 \
+  --interferer-snr-db 0 \
+  --wind-noise-level 0.2 \
+  --highpass-hz 300
+```
+
+To intentionally evaluate with the wrong array geometry:
+
+```bash
+skyear-eval-array-audio \
+  --wav reports/sim/moving_source_8ch.wav \
+  --truth reports/sim/moving_source_truth.csv \
+  --array-radius-m 0.12
+```
+
 ## Dataset And Benchmark Tools
 
 Public datasets are useful for engineering benchmarks and model training candidates. They are not operational validation by themselves.

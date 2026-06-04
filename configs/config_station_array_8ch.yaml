@@ -89,6 +89,11 @@ direction:
   enabled: true
   array_radius_m: 0.35
   scan_step_deg: 5
+  calibration_file: configs/array_calibration_station_001.json
+  min_beam_confidence_pct: 0.55
+  min_peak_ratio: 1.3
+  max_second_peak_ratio: 0.85
+  reject_ambiguous_bearing: true
 
 server:
   url: http://127.0.0.1:8080/events

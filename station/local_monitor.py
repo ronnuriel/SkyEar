@@ -120,6 +120,26 @@ def build_local_monitor_snapshot(
         "beam_peak_to_second_peak": event.beam_peak_to_second_peak
         if getattr(event, "beam_peak_to_second_peak", None) is not None
         else metadata.get("beam_peak_to_second_peak"),
+        "raw_estimated_azimuth_deg": metadata.get("raw_estimated_azimuth_deg"),
+        "second_peak_bearing_deg": event.second_peak_bearing_deg
+        if getattr(event, "second_peak_bearing_deg", None) is not None
+        else metadata.get("second_peak_bearing_deg"),
+        "second_peak_ratio": event.second_peak_ratio
+        if getattr(event, "second_peak_ratio", None) is not None
+        else metadata.get("second_peak_ratio"),
+        "peak_ratio": event.peak_ratio if getattr(event, "peak_ratio", None) is not None else metadata.get("peak_ratio"),
+        "bearing_ambiguity_deg": event.bearing_ambiguity_deg
+        if getattr(event, "bearing_ambiguity_deg", None) is not None
+        else metadata.get("bearing_ambiguity_deg"),
+        "bearing_reliable": event.bearing_reliable
+        if getattr(event, "bearing_reliable", None) is not None
+        else metadata.get("bearing_reliable"),
+        "bearing_reject_reason": event.bearing_reject_reason
+        if getattr(event, "bearing_reject_reason", None) is not None
+        else metadata.get("bearing_reject_reason"),
+        "bearing_quality": event.bearing_quality
+        if getattr(event, "bearing_quality", None) is not None
+        else metadata.get("bearing_quality"),
         "bearing_stable": event.bearing_stable if event.bearing_stable is not None else metadata.get("bearing_stable"),
         "bearing_uncertainty_deg": event.bearing_uncertainty_deg
         if event.bearing_uncertainty_deg is not None
@@ -137,6 +157,12 @@ def build_local_monitor_snapshot(
             "waveform_points": int(waveform_points),
             "source_sample_count": int(np.asarray(mono).size),
             "sample_rate": metadata.get("sample_rate"),
+            "channel_rms": metadata.get("channel_rms"),
+            "channel_health": metadata.get("channel_health"),
+            "bad_channels": metadata.get("bad_channels"),
+            "kept_channels": metadata.get("kept_channels"),
+            "calibration_loaded": metadata.get("calibration_loaded"),
+            "calibration_file": metadata.get("calibration_file"),
         },
         "spectrum": dict(spectrum),
         "spectrogram": dict(spectrogram),

@@ -11,6 +11,7 @@ CONFIG_FILES = (
     "config_station_2.yaml",
     "config_station_array_8ch.yaml",
     "config_station_remote.yaml",
+    "array_calibration_station_001.json",
 )
 
 

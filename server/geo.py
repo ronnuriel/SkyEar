@@ -173,6 +173,11 @@ def _event_location(event: Any) -> tuple[float | None, float | None, float | Non
 
 def _event_bearing(event: Any) -> float | None:
     metadata = getattr(event, "metadata", {}) or {}
+    reliable = getattr(event, "bearing_reliable", None)
+    if reliable is None:
+        reliable = metadata.get("bearing_reliable")
+    if reliable is False or str(reliable).strip().lower() == "false":
+        return None
     for value in (
         getattr(event, "estimated_azimuth_deg", None),
         metadata.get("beam_bearing_deg"),
@@ -203,10 +208,14 @@ def latest_candidate_bearings(events: list[Any], max_age_sec: float = 10.0, now:
             continue
         lat, lon, _alt = _event_location(event)
         bearing = _event_bearing(event)
-        if lat is None or lon is None:
+        if lat is None or lon is None or bearing is None:
             continue
         metadata = getattr(event, "metadata", {}) or {}
         uncertainty = getattr(event, "bearing_uncertainty_deg", None) or metadata.get("bearing_uncertainty_deg") or 25.0
+        reliable = getattr(event, "bearing_reliable", None)
+        if reliable is None:
+            reliable = metadata.get("bearing_reliable")
+        reject_reason = getattr(event, "bearing_reject_reason", None) or metadata.get("bearing_reject_reason")
         bearings.append(
             {
                 "station_id": getattr(event, "station_id"),
@@ -216,6 +225,8 @@ def latest_candidate_bearings(events: list[Any], max_age_sec: float = 10.0, now:
                 "uncertainty_deg": float(uncertainty),
                 "beam_confidence_pct": getattr(event, "beam_confidence_pct", None) or metadata.get("beam_confidence_pct"),
                 "bearing_stable": getattr(event, "bearing_stable", None) or metadata.get("bearing_stable"),
+                "bearing_reliable": reliable,
+                "bearing_reject_reason": reject_reason,
             }
         )
     return bearings

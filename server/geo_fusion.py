@@ -75,6 +75,13 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
                 "bearing_deg": bearing,
                 "bearing_uncertainty_deg": event.bearing_uncertainty_deg if event else None,
                 "beam_confidence_pct": event.beam_confidence_pct if event else None,
+                "second_peak_bearing_deg": event.second_peak_bearing_deg if event else None,
+                "second_peak_ratio": event.second_peak_ratio if event else None,
+                "peak_ratio": event.peak_ratio if event else None,
+                "bearing_ambiguity_deg": event.bearing_ambiguity_deg if event else None,
+                "bearing_reliable": event.bearing_reliable if event else None,
+                "bearing_reject_reason": event.bearing_reject_reason if event else None,
+                "bearing_quality": event.bearing_quality if event else None,
             }
         )
     events = db.recent_events(limit=200)

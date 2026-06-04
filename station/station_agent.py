@@ -12,9 +12,10 @@ from urllib.parse import urlparse, urlunparse
 
 from shared.auth import auth_headers
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
+from station.array_calibration import ArrayCalibration, apply_array_calibration, load_calibration
 from station.array_profiles import array_profile
 from station.audio_capture import audio_blocks, list_input_devices, to_mono
-from station.beamforming import BeamformingResult, estimate_bearing
+from station.beamforming import BeamformingResult, bearing_quality_from_result, estimate_bearing
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
 from station.hf_detector import DEFAULT_MODEL_ID, HFDetector
@@ -270,6 +271,25 @@ def _mic_positions(mic_cfg: dict[str, Any]) -> np.ndarray | None:
     return array[:, :3] if array.shape[1] >= 3 else np.pad(array, ((0, 0), (0, 1)))
 
 
+def load_array_calibration_for_station(dir_cfg: dict[str, Any], audio_cfg: dict[str, Any]) -> ArrayCalibration | None:
+    path = dir_cfg.get("calibration_file")
+    channels = int(audio_cfg.get("channels", 1))
+    if not path:
+        if channels >= 4:
+            print("Array uncalibrated; bearing may be unreliable")
+        return None
+    try:
+        calibration = load_calibration(path)
+    except Exception as exc:
+        print(f"[WARN] could not load array calibration_file={path}: {type(exc).__name__}: {exc}")
+        if channels >= 4:
+            print("Array uncalibrated; bearing may be unreliable")
+        return None
+    if calibration is not None:
+        print(f"Array calibration loaded: {path}")
+    return calibration
+
+
 def _build_hf_detector(hf_cfg: dict[str, Any]) -> HFDetector:
     return HFDetector(
         model_id=str(hf_cfg.get("model_id") or DEFAULT_MODEL_ID),
@@ -423,6 +443,7 @@ def main():
     heartbeat_url = str(heartbeat_cfg.get("url") or heartbeat_url_from_events_url(server_cfg["url"]))
     mic_positions = _mic_positions(mic_cfg)
     beamforming_requested = bool(beamforming_cfg.get("enabled", False))
+    array_calibration = load_array_calibration_for_station(dir_cfg, audio_cfg)
     beamforming_allowed = (
         beamforming_requested
         and mic_cfg.get("sync_mode") == "synchronized"
@@ -507,16 +528,56 @@ def main():
 
         azimuth, direction_confidence = None, None
         beam = BeamformingResult()
+        beam_audio = audio
+        beam_positions = mic_positions
+        calibration_meta = {
+            "calibration_loaded": array_calibration is not None,
+            "calibration_file": None if array_calibration is None else array_calibration.source_path,
+        }
         if beamforming_allowed and audio.ndim == 2 and audio.shape[1] >= 2 and mic_positions is not None:
+            try:
+                beam_audio, beam_positions, calibration_meta = apply_array_calibration(
+                    audio,
+                    mic_positions,
+                    array_calibration,
+                )
+            except Exception as exc:
+                calibration_meta = {
+                    "calibration_loaded": array_calibration is not None,
+                    "calibration_file": None if array_calibration is None else array_calibration.source_path,
+                    "calibration_error": f"{type(exc).__name__}: {exc}",
+                }
+                print("[WARN] array calibration apply failed:", calibration_meta["calibration_error"])
+                beam_audio = audio
+                beam_positions = mic_positions
             beam = estimate_bearing(
-                audio,
+                beam_audio,
                 int(audio_cfg["sample_rate"]),
-                mic_positions,
+                beam_positions,
                 method=str(beamforming_cfg.get("method", "delay_and_sum")),
                 scan_step_deg=int(beamforming_cfg.get("scan_step_deg", dir_cfg.get("scan_step_deg", 5))),
                 low_hz=int(beamforming_cfg.get("low_hz", det_cfg.get("f0_min", 500))),
                 high_hz=int(beamforming_cfg.get("high_hz", max_freq)),
                 bearing_stability_deg=float(beamforming_cfg.get("bearing_stability_deg", 15.0)),
+                min_beam_confidence_pct=float(
+                    dir_cfg.get(
+                        "min_beam_confidence_pct",
+                        beamforming_cfg.get("min_beam_confidence_pct", 0.55),
+                    )
+                ),
+                min_peak_ratio=float(dir_cfg.get("min_peak_ratio", beamforming_cfg.get("min_peak_ratio", 1.3))),
+                max_second_peak_ratio=float(
+                    dir_cfg.get(
+                        "max_second_peak_ratio",
+                        beamforming_cfg.get("max_second_peak_ratio", 0.85),
+                    )
+                ),
+                reject_ambiguous_bearing=bool(
+                    dir_cfg.get(
+                        "reject_ambiguous_bearing",
+                        beamforming_cfg.get("reject_ambiguous_bearing", True),
+                    )
+                ),
                 include_scan=True,
             )
             azimuth = beam.bearing_deg
@@ -528,8 +589,15 @@ def main():
                 radius_m=float(dir_cfg["array_radius_m"]),
                 step_deg=int(dir_cfg["scan_step_deg"]),
             )
+            beam.bearing_reliable = azimuth is not None
+            beam.bearing_reject_reason = None if azimuth is not None else "direction_estimator_no_bearing"
         if azimuth is not None:
             azimuth = (float(azimuth) + float(station_geo["station_heading_offset_deg"] or 0.0)) % 360.0
+        raw_azimuth = azimuth
+        bearing_reliable = bool(getattr(beam, "bearing_reliable", False)) if beamforming_allowed else bool(azimuth is not None)
+        if beamforming_allowed and not bearing_reliable:
+            azimuth = None
+        bearing_quality = bearing_quality_from_result(beam) if raw_azimuth is not None else None
 
         event = AcousticEvent(
             station_id=station_id,
@@ -582,6 +650,13 @@ def main():
             beam_confidence_pct=beam.beam_confidence_pct,
             beam_peak_to_median=beam.beam_peak_to_median,
             beam_peak_to_second_peak=beam.beam_peak_to_second_peak,
+            second_peak_bearing_deg=beam.second_peak_bearing_deg,
+            second_peak_ratio=beam.second_peak_ratio,
+            peak_ratio=beam.peak_ratio,
+            bearing_ambiguity_deg=beam.bearing_ambiguity_deg,
+            bearing_reliable=bearing_reliable,
+            bearing_reject_reason=beam.bearing_reject_reason,
+            bearing_quality=bearing_quality,
             bearing_stable=beam.bearing_stable if beamforming_allowed else None,
             bearing_uncertainty_deg=beam.bearing_uncertainty_deg,
             rms=frame.rms,
@@ -605,12 +680,21 @@ def main():
                 "coverage_radius_m": None if coverage_radius_m is None else float(coverage_radius_m),
                 "mic_profile": mic_cfg.get("profile"),
                 "mic_sync_mode": mic_cfg.get("sync_mode"),
+                **calibration_meta,
                 "beamforming_method": beam.beamforming_method if beamforming_allowed else None,
                 "beam_score": beam.beam_score,
                 "beam_snr_gain_db": beam.beam_snr_gain_db,
                 "beam_confidence_pct": beam.beam_confidence_pct,
                 "beam_peak_to_median": beam.beam_peak_to_median,
                 "beam_peak_to_second_peak": beam.beam_peak_to_second_peak,
+                "raw_estimated_azimuth_deg": raw_azimuth,
+                "second_peak_bearing_deg": beam.second_peak_bearing_deg,
+                "second_peak_ratio": beam.second_peak_ratio,
+                "peak_ratio": beam.peak_ratio,
+                "bearing_ambiguity_deg": beam.bearing_ambiguity_deg,
+                "bearing_reliable": bearing_reliable,
+                "bearing_reject_reason": beam.bearing_reject_reason,
+                "bearing_quality": bearing_quality,
                 "bearing_stable": beam.bearing_stable if beamforming_allowed else None,
                 "bearing_uncertainty_deg": beam.bearing_uncertainty_deg,
                 "suspect_threshold": frame.suspect_threshold,
@@ -784,6 +868,10 @@ def main():
                     "location_label": station_geo["station_location_label"],
                     "mic_profile": mic_cfg.get("profile"),
                     "mic_sync_mode": mic_cfg.get("sync_mode"),
+                    "calibration_loaded": calibration_meta.get("calibration_loaded"),
+                    "calibration_file": calibration_meta.get("calibration_file"),
+                    "bad_channels": calibration_meta.get("bad_channels"),
+                    "channel_health": calibration_meta.get("channel_health"),
                     "beamforming_enabled": beamforming_allowed,
                     "beamforming_method": beamforming_cfg.get("method") if beamforming_allowed else None,
                     "window_index": window_index,
