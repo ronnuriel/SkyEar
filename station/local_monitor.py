@@ -110,6 +110,17 @@ def history_row_from_event(event: AcousticEvent) -> dict[str, Any]:
         "bearing_used_for_geo": event.bearing_used_for_geo
         if event.bearing_used_for_geo is not None
         else metadata.get("bearing_used_for_geo"),
+        "two_mic_look_label": event.two_mic_look_label or metadata.get("two_mic_look_label"),
+        "two_mic_look_hint": event.two_mic_look_hint or metadata.get("two_mic_look_hint"),
+        "two_mic_angle_from_center_deg": event.two_mic_angle_from_center_deg
+        if event.two_mic_angle_from_center_deg is not None
+        else metadata.get("two_mic_angle_from_center_deg"),
+        "two_mic_direction_stable": event.two_mic_direction_stable
+        if event.two_mic_direction_stable is not None
+        else metadata.get("two_mic_direction_stable"),
+        "two_mic_front_back_ambiguous": event.two_mic_front_back_ambiguous
+        if event.two_mic_front_back_ambiguous is not None
+        else metadata.get("two_mic_front_back_ambiguous"),
     }
 
 
@@ -189,11 +200,37 @@ def build_local_monitor_snapshot(
         if event.bearing_uncertainty_deg is not None
         else metadata.get("bearing_uncertainty_deg"),
         "two_mic_direction_enabled": metadata.get("two_mic_direction_enabled"),
-        "two_mic_side": metadata.get("two_mic_side"),
-        "two_mic_delay_us": metadata.get("two_mic_delay_us"),
-        "two_mic_confidence": metadata.get("two_mic_confidence"),
-        "two_mic_peak_ratio": metadata.get("two_mic_peak_ratio"),
-        "two_mic_reason": metadata.get("two_mic_reason"),
+        "two_mic_side": event.two_mic_side or metadata.get("two_mic_side"),
+        "two_mic_delay_us": event.two_mic_delay_us if event.two_mic_delay_us is not None else metadata.get("two_mic_delay_us"),
+        "two_mic_angle_from_center_deg": event.two_mic_angle_from_center_deg
+        if event.two_mic_angle_from_center_deg is not None
+        else metadata.get("two_mic_angle_from_center_deg"),
+        "two_mic_confidence": event.two_mic_confidence
+        if event.two_mic_confidence is not None
+        else metadata.get("two_mic_confidence"),
+        "two_mic_peak_ratio": event.two_mic_peak_ratio
+        if event.two_mic_peak_ratio is not None
+        else metadata.get("two_mic_peak_ratio"),
+        "two_mic_reason": event.two_mic_reason or metadata.get("two_mic_reason"),
+        "two_mic_look_label": event.two_mic_look_label or metadata.get("two_mic_look_label"),
+        "two_mic_look_hint": event.two_mic_look_hint or metadata.get("two_mic_look_hint"),
+        "two_mic_sector_width_deg": event.two_mic_sector_width_deg
+        if event.two_mic_sector_width_deg is not None
+        else metadata.get("two_mic_sector_width_deg"),
+        "two_mic_front_back_ambiguous": event.two_mic_front_back_ambiguous
+        if event.two_mic_front_back_ambiguous is not None
+        else metadata.get("two_mic_front_back_ambiguous"),
+        "two_mic_direction_stable": event.two_mic_direction_stable
+        if event.two_mic_direction_stable is not None
+        else metadata.get("two_mic_direction_stable"),
+        "two_mic_stable_window_count": metadata.get("two_mic_stable_window_count"),
+        "two_mic_tracker_window_count": metadata.get("two_mic_tracker_window_count"),
+        "possible_front_azimuth_deg": event.possible_front_azimuth_deg
+        if event.possible_front_azimuth_deg is not None
+        else metadata.get("possible_front_azimuth_deg"),
+        "possible_back_azimuth_deg": event.possible_back_azimuth_deg
+        if event.possible_back_azimuth_deg is not None
+        else metadata.get("possible_back_azimuth_deg"),
         "two_mic_spacing_m": metadata.get("two_mic_spacing_m"),
     }
     if beam_result is not None:

@@ -53,6 +53,19 @@ def _harmonic_missing_fundamental(sec: float = 1.0, channels: int = 1) -> np.nda
     return out
 
 
+def _harmonic_f0(f0_hz: float, sec: float = 1.0, channels: int = 1) -> np.ndarray:
+    t = np.arange(int(SR * sec), dtype=np.float32) / SR
+    mono = np.zeros_like(t)
+    for k in range(1, 5):
+        mono += (0.05 / k) * np.sin(2 * np.pi * float(f0_hz) * k * t)
+    if channels == 1:
+        return mono.astype(np.float32)
+    out = np.zeros((mono.size, channels), dtype=np.float32)
+    out[:, 0] = mono
+    out[:, 1:] = mono[:, None]
+    return out
+
+
 def _calibrated_state(**overrides) -> StationDetectorState:
     state = StationDetectorState(_cfg(**overrides))
     state.update(_quiet(), SR, 0.0)
@@ -806,3 +819,72 @@ def test_harmonic_track_holds_when_fundamental_is_missing_but_ridges_continue():
     assert frame.f0_track_hz is not None
     assert abs(frame.f0_track_hz - 700) <= 80
     assert frame.stable_harmonic_ridge_count >= 3
+
+
+def test_harmonic_lock_respects_configured_f0_range_by_default():
+    state = _calibrated_state(
+        harmonic_lock_enabled=True,
+        harmonic_broad_scan_enabled=False,
+        f0_min=700,
+        f0_max=1600,
+    )
+
+    frame = state.update(_harmonic_f0(300), SR, 3.0, hf_p_drone=0.95)
+
+    assert frame.f0_raw_hz is None or frame.f0_raw_hz >= 700
+    assert frame.best_f0_hz is None or frame.best_f0_hz >= 700
+
+
+def test_harmonic_broad_scan_is_explicit_opt_in():
+    state = _calibrated_state(
+        harmonic_lock_enabled=True,
+        harmonic_broad_scan_enabled=True,
+        harmonic_broad_f0_min=300,
+        harmonic_broad_f0_max=3500,
+        f0_min=700,
+        f0_max=1600,
+    )
+
+    frame = state.update(_harmonic_f0(300), SR, 3.0, hf_p_drone=0.95)
+
+    assert frame.f0_raw_hz is not None
+    assert frame.f0_raw_hz < 700
+
+
+def test_adaptive_threshold_caps_and_reports_calibration_stats():
+    state = StationDetectorState(
+        _cfg(
+            calibration_seconds=2.0,
+            min_suspect_threshold=16.0,
+            min_alert_threshold=22.0,
+            max_suspect_threshold=24.0,
+            max_alert_threshold=32.0,
+        )
+    )
+
+    state.update(_harmonic(), SR, 0.0)
+    frame = state.update(_harmonic(), SR, 2.0)
+
+    assert frame.suspect_threshold == 24.0
+    assert frame.alert_threshold == 32.0
+    assert frame.threshold_source == "adaptive_capped"
+    assert frame.calibration_p95 is not None
+    assert "cap" in frame.adaptive_threshold_reason
+
+
+def test_soft_harmonic_presence_prevents_acoustic_stale_downgrade():
+    state = _calibrated_state(
+        detection_profile="field_debug",
+        allow_single_mic_alert=False,
+        min_suspect_threshold=120.0,
+        min_alert_threshold=140.0,
+        max_acoustic_age_sec=2.0,
+        smoothing_enabled=False,
+    )
+
+    frame = state.update(_harmonic(), SR, 5.5, hf_p_drone=0.78)
+
+    assert frame.harmonic_evidence_pct_smoothed == 0.0
+    assert frame.harmonic_soft_present is True
+    assert frame.harmonic_pass is True
+    assert frame.candidate_block_reason != "harmonic_below_candidate_support"

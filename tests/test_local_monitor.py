@@ -34,6 +34,16 @@ def _event() -> AcousticEvent:
         ml_positive_run=2,
         strong_run=0,
         best_f0_hz=920,
+        two_mic_side="left",
+        two_mic_delay_us=1500.0,
+        two_mic_angle_from_center_deg=15.0,
+        two_mic_confidence=0.62,
+        two_mic_peak_ratio=1.8,
+        two_mic_look_label="left",
+        two_mic_look_hint="LOOK LEFT - approx 15 deg from center, scan +/-30 deg, front/back ambiguous",
+        two_mic_sector_width_deg=60.0,
+        two_mic_front_back_ambiguous=True,
+        two_mic_direction_stable=True,
         rms=0.03,
         peak=0.2,
         metadata={
@@ -44,6 +54,9 @@ def _event() -> AcousticEvent:
             "channel_rms": [0.1, 0.2],
             "channel_health": ["ok", "dropout"],
             "bad_channels": [1],
+            "two_mic_direction_enabled": True,
+            "two_mic_stable_window_count": 3,
+            "two_mic_tracker_window_count": 5,
         },
     )
 
@@ -90,6 +103,10 @@ def test_local_monitor_payload_contains_event_audio_spectrum_spectrogram(tmp_pat
     assert snapshot["spectrum"] == spectrum
     assert snapshot["spectrogram"] == spectrogram
     assert snapshot["beam"]["beam_scan_deg"] == [0.0, 5.0]
+    assert snapshot["beam"]["two_mic_look_label"] == "left"
+    assert snapshot["beam"]["two_mic_angle_from_center_deg"] == 15.0
+    assert snapshot["beam"]["two_mic_direction_stable"] is True
+    assert snapshot["beam"]["two_mic_stable_window_count"] == 3
     assert snapshot["audio"]["calibration_loaded"] is True
     assert snapshot["audio"]["channel_health"] == ["ok", "dropout"]
     assert "raw_audio" not in snapshot["audio"]

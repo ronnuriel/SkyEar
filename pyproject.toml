@@ -82,8 +82,11 @@ skyear-calibrate-array = "tools.calibrate_array:main"
 skyear-recording-start = "tools.recording_control:start_main"
 skyear-recording-stop = "tools.recording_control:stop_main"
 skyear-recording-mark = "tools.recording_control:mark_main"
+skyear-recording-state = "tools.recording_control:state_main"
 skyear-build-recording-manifest = "tools.build_recording_manifest:main"
 skyear-eval-recording-session = "tools.eval_recording_session:main"
+skyear-debug-harmonic-wav = "tools.debug_harmonic_wav:main"
+skyear-check-two-mic-direction = "tools.check_two_mic_direction:main"
 
 [tool.setuptools.packages.find]
 include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*", "data*"]

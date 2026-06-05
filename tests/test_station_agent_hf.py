@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from station import station_agent
+from station.detector_state import StationDetectorStateConfig
 from station.hf_detector import HFDetectionResult
 
 
@@ -118,6 +119,33 @@ def test_audio_highpass_filter_is_optional():
 
 def test_heading_offset_is_applied_once_with_wraparound():
     assert station_agent._apply_heading_offset(350.0, 20.0) == 10.0
+
+
+def test_strongest_harmonic_mono_mix_avoids_two_channel_cancellation():
+    sample_rate = 44100
+    t = np.arange(sample_rate, dtype=np.float32) / sample_rate
+    tone = np.zeros_like(t)
+    for k in range(1, 5):
+        tone += (0.05 / k) * np.sin(2 * np.pi * 700 * k * t)
+    audio = np.stack([tone, -tone], axis=1).astype(np.float32)
+    cfg = StationDetectorStateConfig(f0_min=700, f0_max=1600, max_freq=6000, min_harmonics=3)
+
+    mono, selected, rms, scores = station_agent._analysis_mono(audio, sample_rate, "strongest_harmonic", cfg)
+
+    assert selected in {0, 1}
+    assert rms[0] > 0.0
+    assert max(scores) > 16.0
+    assert float(np.max(np.abs(mono))) > 0.01
+    assert float(np.max(np.abs(audio.mean(axis=1)))) < 1e-6
+
+
+def test_unsynchronized_multichannel_defaults_to_strongest_harmonic_mono_mix():
+    mode = station_agent._resolve_mono_mix_mode(
+        {"channels": 2},
+        {"sync_mode": "unsynchronized"},
+    )
+
+    assert mode == "strongest_harmonic"
     assert station_agent._apply_heading_offset(90.0, 0.0) == 90.0
     assert station_agent._apply_heading_offset(None, 20.0) is None
 

@@ -16,6 +16,8 @@ audio:
   window_sec: 1.0
   highpass_hz: 300
   highpass_order: 4
+  mono_mix_mode: strongest_harmonic
+  capture_queue_blocks: 4
 
 detector:
   f0_min: 700
@@ -24,6 +26,10 @@ detector:
   min_harmonics: 3
   min_suspect_threshold: 16.0
   min_alert_threshold: 22.0
+  max_suspect_threshold: 24.0
+  max_alert_threshold: 32.0
+  calibration_ignore_first_sec: 1.0
+  adaptive_thresholds_enabled: true
   calibration_seconds: 6.0
   min_alert_duration_sec: 2.0
   clear_after_sec: 3.0
@@ -52,12 +58,18 @@ hf:
 
 harmonic:
   lock_enabled: true
+  broad_scan_enabled: false
+  broad_f0_min: 300
+  broad_f0_max: 3500
   lock_min_duration_sec: 3.0
   lock_hold_sec: 5.0
   f0_jump_penalty: 0.5
   ridge_max_drift_hz: 80
   track_bandwidth_hz: 120
   noise_floor_rolling_median_sec: 10
+  min_ridge_prominence_db: 6.0
+  soft_min_ridges: 3
+  soft_min_score: 12.0
   max_acoustic_age_sec: 6.0
 
 mic_array:
@@ -73,8 +85,18 @@ two_mic_direction:
   low_hz: 700
   high_hz: 6000
   min_delay_us: 40
-  min_peak_ratio: 1.2
+  center_deadzone_deg: 12
+  look_sector_width_deg: 60
+  unstable_sector_width_deg: 120
+  far_side_angle_deg: 55
+  min_peak_ratio: 1.4
   min_rms: 0.0005
+  smoothing_windows: 5
+  min_stable_windows: 3
+  max_angle_std_deg: 25
+  max_side_flip_rate: 0.35
+  min_confidence: 0.45
+  front_heading_deg: null
 
 direction:
   enabled: false

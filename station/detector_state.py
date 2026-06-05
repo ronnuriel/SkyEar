@@ -62,6 +62,16 @@ class StationDetectorStateConfig:
     harmonic_ridge_max_drift_hz: float = 80.0
     harmonic_track_bandwidth_hz: float = 120.0
     harmonic_noise_floor_rolling_median_sec: float = 10.0
+    harmonic_broad_scan_enabled: bool = False
+    harmonic_broad_f0_min: int = 300
+    harmonic_broad_f0_max: int = 3500
+    harmonic_min_ridge_prominence_db: float = 6.0
+    harmonic_soft_min_ridges: int = 3
+    harmonic_soft_min_score: float = 12.0
+    adaptive_thresholds_enabled: bool = True
+    max_suspect_threshold: Optional[float] = None
+    max_alert_threshold: Optional[float] = None
+    calibration_ignore_first_sec: float = 0.0
 
 
 @dataclass
@@ -139,6 +149,15 @@ class StationDetectionFrame:
     f0_jump_reason: str = ""
     stable_harmonic_ridge_count: int = 0
     longest_ridge_duration_sec: float = 0.0
+    harmonic_soft_present: bool = False
+    harmonic_soft_run: int = 0
+    harmonic_adaptive_threshold_pass: bool = False
+    harmonic_config_threshold_pass: bool = False
+    calibration_p50: Optional[float] = None
+    calibration_p95: Optional[float] = None
+    calibration_mad: Optional[float] = None
+    threshold_source: str = "config"
+    adaptive_threshold_reason: str = ""
 
 
 def _sigmoid_score(score: float, threshold: float) -> float:
@@ -203,6 +222,12 @@ class StationDetectorState:
         self._tracked_f0_hz: Optional[int] = None
         self._longest_ridge_duration_sec: float = 0.0
         self._alert_below_since: Optional[float] = None
+        self.harmonic_soft_history: list[bool] = []
+        self.calibration_p50: Optional[float] = None
+        self.calibration_p95: Optional[float] = None
+        self.calibration_mad: Optional[float] = None
+        self.threshold_source = "config"
+        self.adaptive_threshold_reason = ""
 
     def _profile(self) -> str:
         profile = str(getattr(self.config, "detection_profile", "conservative") or "conservative").strip().lower()
@@ -243,9 +268,10 @@ class StationDetectorState:
         hf_error: bool = False,
         hf_age_sec: Optional[float] = None,
         acoustic_bearing_support: bool = False,
+        mono_override: Optional[np.ndarray] = None,
     ) -> StationDetectionFrame:
         channels = _as_samples_by_channels(audio)
-        mono = channels.mean(axis=1)
+        mono = np.asarray(mono_override, dtype=np.float32).reshape(-1) if mono_override is not None else channels.mean(axis=1)
         mono_rms = _rms(mono)
         mono_peak = float(np.max(np.abs(mono))) if mono.size else 0.0
 
@@ -256,8 +282,9 @@ class StationDetectorState:
             self.calibration_started_at = timestamp
 
         if not self.calibrated:
-            self.background_scores.append(mono_score)
             elapsed = timestamp - self.calibration_started_at
+            if elapsed >= float(self.config.calibration_ignore_first_sec):
+                self.background_scores.append(mono_score)
             if elapsed < self.config.calibration_seconds:
                 return self._frame(
                     status="calibrating",
@@ -317,18 +344,6 @@ class StationDetectorState:
             combined_drone_evidence_pct=combined_drone_evidence_pct,
             harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
         )
-        has_suspect_harmonic = harmonic_evidence_pct_raw > 0.0 or evidence_score >= self.suspect_threshold
-        if has_suspect_harmonic or harmonic_evidence_pct_smoothed > 0.0:
-            self._last_acoustic_at = float(timestamp)
-        harmonic_age_sec = (
-            None
-            if self._last_acoustic_at is None
-            else max(0.0, float(timestamp) - float(self._last_acoustic_at))
-        )
-        harmonic_stale = harmonic_age_sec is not None and harmonic_age_sec > float(self.config.max_acoustic_age_sec)
-        if harmonic_stale:
-            harmonic_evidence_pct_smoothed = 0.0
-            combined_drone_evidence_pct = _combined_drone_evidence(ml_drone_pct_smoothed, harmonic_evidence_pct_smoothed)
         track_state = self._update_harmonic_track(
             timestamp=timestamp,
             raw_f0_hz=raw_mono_f0,
@@ -338,6 +353,39 @@ class StationDetectorState:
             details=track_meta.get("details") or [],
             f0_jump_reason=str(track_meta.get("f0_jump_reason") or ""),
         )
+        stable_ridge_count = int(track_state["stable_harmonic_ridge_count"])
+        ridge_present_count = self._ridge_present_count(track_meta.get("details") or [])
+        harmonic_config_threshold_pass = evidence_score >= self.config.min_suspect_threshold
+        harmonic_adaptive_threshold_pass = evidence_score >= self.suspect_threshold
+        harmonic_soft_present = bool(
+            best_f0 is not None
+            and (
+                harmonic_config_threshold_pass
+                or harmonic_adaptive_threshold_pass
+                or (
+                    evidence_score >= float(self.config.harmonic_soft_min_score)
+                    and (
+                        stable_ridge_count >= max(1, int(self.config.harmonic_soft_min_ridges))
+                        or ridge_present_count >= max(1, int(self.config.harmonic_soft_min_ridges))
+                    )
+                )
+            )
+        )
+        self.harmonic_soft_history.append(harmonic_soft_present)
+        self._trim_history(self.harmonic_soft_history)
+        harmonic_soft_run = self._current_true_run(self.harmonic_soft_history)
+        has_suspect_harmonic = harmonic_evidence_pct_raw > 0.0 or harmonic_adaptive_threshold_pass or harmonic_soft_present
+        if has_suspect_harmonic or harmonic_evidence_pct_smoothed > 0.0:
+            self._last_acoustic_at = float(timestamp)
+        harmonic_age_sec = (
+            None
+            if self._last_acoustic_at is None
+            else max(0.0, float(timestamp) - float(self._last_acoustic_at))
+        )
+        harmonic_stale = harmonic_age_sec is not None and harmonic_age_sec > float(self.config.max_acoustic_age_sec)
+        if harmonic_stale and not harmonic_soft_present:
+            harmonic_evidence_pct_smoothed = 0.0
+            combined_drone_evidence_pct = _combined_drone_evidence(ml_drone_pct_smoothed, harmonic_evidence_pct_smoothed)
         self._record_history(canonical_best_f0, harmonic_score_smoothed)
         f0_stable = self._f0_is_stable()
         f0_family_stable = self._f0_family_is_stable()
@@ -350,6 +398,7 @@ class StationDetectorState:
             not harmonic_stale
             and (
                 (has_suspect_harmonic and harmonic_evidence_pct_smoothed >= self.config.ml_candidate_harmonic_min_pct)
+                or harmonic_soft_present
                 or bool(acoustic_bearing_support)
             )
         )
@@ -654,6 +703,15 @@ class StationDetectorState:
             f0_jump_reason=track_state["f0_jump_reason"],
             stable_harmonic_ridge_count=track_state["stable_harmonic_ridge_count"],
             longest_ridge_duration_sec=track_state["longest_ridge_duration_sec"],
+            harmonic_soft_present=harmonic_soft_present,
+            harmonic_soft_run=harmonic_soft_run,
+            harmonic_adaptive_threshold_pass=harmonic_adaptive_threshold_pass,
+            harmonic_config_threshold_pass=harmonic_config_threshold_pass,
+            calibration_p50=self.calibration_p50,
+            calibration_p95=self.calibration_p95,
+            calibration_mad=self.calibration_mad,
+            threshold_source=self.threshold_source,
+            adaptive_threshold_reason=self.adaptive_threshold_reason,
             f0_family_stable=f0_family_stable,
             decision_stage=decision_stage,
             blocked_by=blocked_by,
@@ -681,10 +739,10 @@ class StationDetectorState:
         raw_score, raw_f0, raw_details = harmonic_score(
             mono,
             sr,
-            broad_min,
-            broad_max,
+            *self._raw_f0_scan_range(),
             self.config.max_freq,
             self.config.min_harmonics,
+            self.config.harmonic_min_ridge_prominence_db,
         )
         if not self.config.harmonic_lock_enabled or self._tracked_f0_hz is None:
             return float(raw_score), raw_f0, raw_f0, {
@@ -693,8 +751,8 @@ class StationDetectorState:
             }
 
         bandwidth = float(self.config.harmonic_track_bandwidth_hz)
-        low = max(100, int(round(float(self._tracked_f0_hz) - bandwidth)))
-        high = min(int(3500), int(round(float(self._tracked_f0_hz) + bandwidth)))
+        low = max(int(self.config.f0_min), int(round(float(self._tracked_f0_hz) - bandwidth)))
+        high = min(int(self.config.f0_max), int(round(float(self._tracked_f0_hz) + bandwidth)))
         track_score, track_f0, track_details = harmonic_score(
             mono,
             sr,
@@ -702,6 +760,7 @@ class StationDetectorState:
             high,
             self.config.max_freq,
             self.config.min_harmonics,
+            self.config.harmonic_min_ridge_prominence_db,
         )
         if track_f0 is not None and raw_f0 is not None:
             jump_hz = abs(float(raw_f0) - float(self._tracked_f0_hz))
@@ -726,6 +785,17 @@ class StationDetectorState:
             "f0_jump_reason": "",
         }
 
+    def _raw_f0_scan_range(self) -> tuple[int, int]:
+        if self.config.harmonic_broad_scan_enabled:
+            low = int(self.config.harmonic_broad_f0_min)
+            high = int(self.config.harmonic_broad_f0_max)
+        else:
+            low = int(self.config.f0_min)
+            high = int(self.config.f0_max)
+        low = max(1, low)
+        high = max(low, high)
+        return low, high
+
     def _update_harmonic_track(
         self,
         *,
@@ -734,7 +804,7 @@ class StationDetectorState:
         selected_f0_hz: Optional[int],
         harmonic_evidence_pct: float,
         harmonic_evidence_pct_smoothed: float,
-        details: list[float],
+        details: list[object],
         f0_jump_reason: str,
     ) -> dict[str, object]:
         if not self.config.harmonic_lock_enabled:
@@ -772,15 +842,38 @@ class StationDetectorState:
         ridges = self._tracked_ridges(self._tracked_f0_hz, details)
         return self._harmonic_track_state(active, raw_f0_hz, self._tracked_f0_hz, ridges, age, f0_jump_reason)
 
-    def _tracked_ridges(self, f0_hz: Optional[int], details: list[float]) -> list[dict[str, float | int]]:
+    def _tracked_ridges(self, f0_hz: Optional[int], details: list[object]) -> list[dict[str, float | int]]:
         if f0_hz is None:
             return []
-        count = max(0, len(details))
-        return [
-            {"k": k, "freq_hz": float(k * float(f0_hz))}
-            for k in range(1, count + 1)
-            if k * float(f0_hz) <= float(self.config.max_freq)
-        ]
+        ridges: list[dict[str, float | int]] = []
+        for idx, detail in enumerate(details, start=1):
+            if isinstance(detail, dict):
+                if not bool(detail.get("present", True)):
+                    continue
+                k = int(detail.get("k", idx))
+                freq = float(detail.get("peak_hz") or detail.get("target_hz") or (k * float(f0_hz)))
+                prominence = detail.get("prominence_db")
+                item: dict[str, float | int] = {"k": k, "freq_hz": freq}
+                if prominence is not None:
+                    item["prominence_db"] = float(prominence)
+                ridges.append(item)
+                continue
+            freq = float(idx * float(f0_hz))
+            if freq <= float(self.config.max_freq):
+                ridges.append({"k": idx, "freq_hz": freq})
+        return ridges
+
+    def _ridge_present_count(self, details: list[object]) -> int:
+        if not details:
+            return 0
+        count = 0
+        for detail in details:
+            if isinstance(detail, dict):
+                if bool(detail.get("present", True)):
+                    count += 1
+            else:
+                count += 1
+        return count
 
     def _harmonic_track_state(
         self,
@@ -811,13 +904,47 @@ class StationDetectorState:
             p95 = float(np.percentile(scores, 95))
             suspect = max(self.config.min_suspect_threshold, p95 + max(3.0 * mad, 1.0))
             alert = max(self.config.min_alert_threshold, p95 + max(6.0 * mad, 3.0), suspect + 4.0)
+            reason = f"p95={p95:.2f},mad={mad:.2f}"
+        else:
+            median = p95 = mad = None
+            suspect = self.config.min_suspect_threshold
+            alert = self.config.min_alert_threshold
+            reason = "no_calibration_samples"
+
+        source = "adaptive"
+        if self.config.adaptive_thresholds_enabled:
+            if self.config.max_suspect_threshold is not None and suspect > float(self.config.max_suspect_threshold):
+                suspect = float(self.config.max_suspect_threshold)
+                source = "adaptive_capped"
+                reason += ",suspect_cap"
+            if self.config.max_alert_threshold is not None and alert > float(self.config.max_alert_threshold):
+                alert = float(self.config.max_alert_threshold)
+                source = "adaptive_capped"
+                reason += ",alert_cap"
         else:
             suspect = self.config.min_suspect_threshold
             alert = self.config.min_alert_threshold
+            source = "config"
+            reason = "adaptive_disabled"
 
         self.suspect_threshold = float(suspect)
-        self.alert_threshold = float(alert)
+        self.alert_threshold = float(max(alert, suspect + 1.0))
+        self.calibration_p50 = median
+        self.calibration_p95 = p95
+        self.calibration_mad = mad
+        self.threshold_source = source
+        self.adaptive_threshold_reason = reason
         self.calibrated = True
+        print(
+            "[CALIBRATION] harmonic thresholds:",
+            f"p50={self.calibration_p50}",
+            f"p95={self.calibration_p95}",
+            f"mad={self.calibration_mad}",
+            f"suspect={self.suspect_threshold:.2f}",
+            f"alert={self.alert_threshold:.2f}",
+            f"source={self.threshold_source}",
+            f"reason={self.adaptive_threshold_reason}",
+        )
 
     def _channel_evidence(self, channels: np.ndarray, sr: int, threshold: float) -> list[ChannelEvidence]:
         evidence = []
@@ -830,6 +957,7 @@ class StationDetectorState:
                 self.config.f0_max,
                 self.config.max_freq,
                 self.config.min_harmonics,
+                self.config.harmonic_min_ridge_prominence_db,
             )
             score = float(score)
             evidence.append(
@@ -1416,6 +1544,15 @@ class StationDetectorState:
         f0_jump_reason: str = "",
         stable_harmonic_ridge_count: int = 0,
         longest_ridge_duration_sec: float = 0.0,
+        harmonic_soft_present: bool = False,
+        harmonic_soft_run: int = 0,
+        harmonic_adaptive_threshold_pass: bool = False,
+        harmonic_config_threshold_pass: bool = False,
+        calibration_p50: Optional[float] = None,
+        calibration_p95: Optional[float] = None,
+        calibration_mad: Optional[float] = None,
+        threshold_source: str = "config",
+        adaptive_threshold_reason: str = "",
     ) -> StationDetectionFrame:
         harmonic_pct = float(np.clip(harmonic_evidence_pct, 0.0, 1.0))
         raw_pct = float(np.clip(harmonic_evidence_pct_raw, 0.0, 1.0))
@@ -1489,4 +1626,13 @@ class StationDetectorState:
             f0_jump_reason=str(f0_jump_reason),
             stable_harmonic_ridge_count=int(stable_harmonic_ridge_count),
             longest_ridge_duration_sec=float(max(0.0, longest_ridge_duration_sec)),
+            harmonic_soft_present=bool(harmonic_soft_present),
+            harmonic_soft_run=int(harmonic_soft_run),
+            harmonic_adaptive_threshold_pass=bool(harmonic_adaptive_threshold_pass),
+            harmonic_config_threshold_pass=bool(harmonic_config_threshold_pass),
+            calibration_p50=None if calibration_p50 is None else float(calibration_p50),
+            calibration_p95=None if calibration_p95 is None else float(calibration_p95),
+            calibration_mad=None if calibration_mad is None else float(calibration_mad),
+            threshold_source=str(threshold_source),
+            adaptive_threshold_reason=str(adaptive_threshold_reason),
         )

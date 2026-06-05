@@ -590,11 +590,32 @@ CLI controls:
 
 ```bash
 skyear-recording-start --config configs/config_station.yaml --session-name home_test
+skyear-recording-state --config configs/config_station.yaml
 skyear-recording-mark --config configs/config_station.yaml --label hover --note "DJI Neo 20m" --distance-m 20 --drone-model "DJI Neo"
 skyear-recording-stop --config configs/config_station.yaml
 ```
 
-Each session is saved under `runtime/recordings/<session_id>/` with chunked WAV files, `metadata.json`, `markers.csv`, and `station_config_snapshot.json`.
+Each session is saved under `runtime/recordings/<session_id>/` with chunked WAV files, `metadata.json`, `markers.csv`, and `station_config_snapshot.json`. Audio capture runs on a dedicated thread: every input block is offered to the local recorder immediately, while detection consumes from a bounded queue and may drop stale processing windows if it falls behind. If the station exits with Ctrl+C while recording, it stops capture, finalizes the active session, and flushes the partial chunk before shutdown.
+
+Useful recording health fields:
+
+- `recording_blocks_written`
+- `audio_input_overflow_count`
+- `detection_blocks_dropped`
+- `capture_queue_depth`
+- `discontinuities`
+- `marker_count`
+
+Debug a recorded WAV:
+
+```bash
+skyear-debug-harmonic-wav runtime/recordings/<session_id>/chunk_0000.wav \
+  --config configs/config_station.yaml
+```
+
+For unsynchronized dual-mic devices such as Volt 2, use `audio.mono_mix_mode: strongest_harmonic` so analysis/HF/spectrogram views do not average two channels that may be phase-shifted enough to cancel each other. Raw recordings still keep all input channels.
+
+For a continuity check, record 180 seconds and compare the sum of `metadata.json` `wav_files[*].duration_sec` to the session duration. They should be close unless `audio_input_overflow_count` or `discontinuities` reports a real capture problem.
 
 Build a local recording manifest:
 
@@ -703,6 +724,14 @@ Common causes:
 - The mics are unsynchronized or too close for precise beamforming at the dominant frequency.
 
 Useful debug fields are `bearing_quality`, `bearing_reject_reason`, `bearing_flip_suppressed`, `bearing_track_status`, `raw_bearing_deg`, and `tracked_bearing_deg`. For `poor` bearings, the map shows a wider/faded sector. For `unreliable` bearings, precise map sectors are hidden.
+
+For Volt 2 dual-mic setups, the local monitor shows a practical `LOOK LEFT`, `LOOK RIGHT`, `LOOK CENTER`, or `UNKNOWN / UNSTABLE` hint. This is a relative look direction from the two-mic baseline, not a true 360 degree bearing. Two microphones cannot distinguish front-left from back-left, so these hints are always front/back ambiguous unless you add more synchronized microphones.
+
+### Harmonic bands visible but detector says background
+
+Check `mono_mix_mode`, `selected_mono_channel`, `per_channel_harmonic_score`, `harmonic_soft_present`, `harmonic_soft_run`, `calibration_p95`, `threshold_source`, and `adaptive_threshold_reason` in the local monitor JSON. If two Volt 2 mics are not synchronized, mean-mixing can cancel the rotor bands; prefer `audio.mono_mix_mode: strongest_harmonic`.
+
+The default f0 search follows `detector.f0_min` and `detector.f0_max`. Only enable `harmonic.broad_scan_enabled` when you intentionally want acquisition outside that configured range.
 
 ## Security For Field Use
 

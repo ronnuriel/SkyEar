@@ -261,6 +261,47 @@ def _show_recording_controls(recording: dict[str, Any], event: dict[str, Any]) -
             st.rerun()
 
 
+def _show_direction_hint(beam: dict[str, Any]) -> None:
+    if not beam.get("two_mic_direction_enabled"):
+        return
+    label = str(beam.get("two_mic_look_label") or "unknown").replace("_", " ").upper()
+    hint = str(beam.get("two_mic_look_hint") or "DIRECTION UNKNOWN - scan left and right")
+    angle = beam.get("two_mic_angle_from_center_deg")
+    sector = beam.get("two_mic_sector_width_deg")
+    confidence = beam.get("two_mic_confidence")
+    stable = bool(beam.get("two_mic_direction_stable"))
+    stable_count = beam.get("two_mic_stable_window_count")
+    window_count = beam.get("two_mic_tracker_window_count")
+    with st.container(border=True):
+        st.markdown("#### Direction hint")
+        if stable:
+            st.success(f"### {label}")
+        else:
+            st.warning("### UNKNOWN / UNSTABLE")
+        st.markdown(f"**{hint}**")
+        cols = st.columns(5)
+        cols[0].metric(
+            "Angle",
+            f"{float(angle):+.0f} deg" if angle is not None else "n/a",
+        )
+        cols[1].metric(
+            "Search sector",
+            f"{float(sector):.0f} deg" if sector is not None else "n/a",
+        )
+        cols[2].metric("Confidence", _metric_pct(confidence))
+        cols[3].metric("Stable", f"{stable_count or 0}/{window_count or 0}")
+        cols[4].metric("Ambiguity", "front/back")
+        front = beam.get("possible_front_azimuth_deg")
+        back = beam.get("possible_back_azimuth_deg")
+        if front is not None and back is not None:
+            st.caption(
+                f"Possible front azimuth {float(front):.0f} deg; possible back azimuth {float(back):.0f} deg. "
+                "Do not treat this as a single bearing."
+            )
+        if beam.get("two_mic_reason"):
+            st.caption(f"Two-mic reason: {beam.get('two_mic_reason')}")
+
+
 def main() -> None:
     args = parse_args()
     state_path = Path(args.state)
@@ -304,6 +345,7 @@ def main() -> None:
     with warnings_panel:
         _show_warnings(snapshot, event, hf, server)
     _show_recording_controls(recording, event)
+    _show_direction_hint(beam)
 
     cols = st.columns(6)
     cols[0].metric("HF drone", _metric_pct(event.get("hf_p_drone") or hf.get("p_drone")))

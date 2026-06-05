@@ -49,6 +49,7 @@ class RecordingControlServer:
                         distance_m=_optional_float(payload.get("distance_m")),
                         bearing_deg=_optional_float(payload.get("bearing_deg")),
                         drone_model=payload.get("drone_model"),
+                        source=str(payload.get("source") or "dashboard"),
                     )
                     _write_json(self, 200, {"ok": True, "state": state})
                     return

@@ -112,6 +112,19 @@ class AcousticEvent(BaseModel):
     bearing_quality: Optional[str] = None
     bearing_stable: Optional[bool] = None
     bearing_uncertainty_deg: Optional[float] = None
+    two_mic_side: Optional[str] = None
+    two_mic_delay_us: Optional[float] = None
+    two_mic_angle_from_center_deg: Optional[float] = None
+    two_mic_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    two_mic_peak_ratio: Optional[float] = None
+    two_mic_reason: Optional[str] = None
+    two_mic_look_label: Optional[str] = None
+    two_mic_look_hint: Optional[str] = None
+    two_mic_sector_width_deg: Optional[float] = None
+    two_mic_front_back_ambiguous: Optional[bool] = None
+    two_mic_direction_stable: Optional[bool] = None
+    possible_front_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    possible_back_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
     track_id: Optional[str] = None
     rms: Optional[float] = None
     peak: Optional[float] = None
