@@ -1,6 +1,7 @@
 from __future__ import annotations
 from collections import deque
 import time
+import uuid
 
 from shared.event_schema import AcousticEvent, FusedAlert, StationHeartbeat
 
@@ -9,6 +10,7 @@ class InMemoryDatabase:
         self.events = deque(maxlen=max_events)
         self.alerts = deque(maxlen=max_alerts)
         self.heartbeats = deque(maxlen=max_heartbeats)
+        self.recording_commands: dict[str, deque[dict]] = {}
 
     def add_event(self, event: AcousticEvent):
         self.events.append(event)
@@ -18,6 +20,26 @@ class InMemoryDatabase:
 
     def add_heartbeat(self, heartbeat: StationHeartbeat):
         self.heartbeats.append(heartbeat)
+
+    def queue_recording_command(self, station_id: str, action: str, payload: dict | None = None) -> dict:
+        command = {
+            "command_id": uuid.uuid4().hex,
+            "station_id": str(station_id),
+            "action": str(action),
+            "payload": payload or {},
+            "created_unix": time.time(),
+        }
+        self.recording_commands.setdefault(str(station_id), deque()).append(command)
+        return command
+
+    def pop_recording_command(self, station_id: str) -> dict | None:
+        queue = self.recording_commands.get(str(station_id))
+        if not queue:
+            return None
+        return queue.popleft()
+
+    def pending_recording_commands(self, station_id: str) -> list[dict]:
+        return list(self.recording_commands.get(str(station_id), []))
 
     def recent_events(self, limit: int = 100):
         return list(self.events)[-limit:]

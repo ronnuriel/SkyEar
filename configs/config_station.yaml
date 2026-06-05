@@ -10,10 +10,12 @@ station:
 
 
 audio:
-  device_id: 0
-  sample_rate: 44100
-  channels: 1
+  device_id: 1
+  sample_rate: 48000
+  channels: 2
   window_sec: 1.0
+  highpass_hz: 300
+  highpass_order: 4
 
 detector:
   f0_min: 700
@@ -46,11 +48,33 @@ hf:
   enabled: true
   run_every_n_windows: 4
   threshold: 0.70
+  max_age_sec: 6.0
+
+harmonic:
+  lock_enabled: true
+  lock_min_duration_sec: 3.0
+  lock_hold_sec: 5.0
+  f0_jump_penalty: 0.5
+  ridge_max_drift_hz: 80
+  track_bandwidth_hz: 120
+  noise_floor_rolling_median_sec: 10
+  max_acoustic_age_sec: 6.0
 
 mic_array:
-  profile: mac_builtin_mono
-  sync_mode: mono
-  channel_mode: mono
+  profile: volt2_dual_mic
+  sync_mode: unsynchronized
+  channel_mode: dual_mic
+
+two_mic_direction:
+  enabled: true
+  spacing_m: 2.00
+  left_channel: 0
+  right_channel: 1
+  low_hz: 700
+  high_hz: 6000
+  min_delay_us: 40
+  min_peak_ratio: 1.2
+  min_rms: 0.0005
 
 direction:
   enabled: false
@@ -61,6 +85,26 @@ direction:
   min_peak_ratio: 1.3
   max_second_peak_ratio: 0.85
   reject_ambiguous_bearing: true
+  bearing_smoothing_alpha: 0.25
+  bearing_flip_hysteresis_windows: 3
+  max_bearing_jump_deg: 60
+  coast_hold_sec: 5.0
+  show_unreliable_bearing: false
+  poor_bearing_sector_width_deg: 60
+  good_bearing_sector_width_deg: 18
+
+recording:
+  enabled: true
+  root: runtime/recordings
+  chunk_sec: 60
+  format: wav
+  auto_record_on_candidate: false
+  pre_roll_sec: 10
+  max_session_sec: 3600
+  max_disk_gb: 20
+  local_control_enabled: true
+  local_control_host: 127.0.0.1
+  local_control_port: 8765
 
 server:
   url: http://127.0.0.1:8080/events

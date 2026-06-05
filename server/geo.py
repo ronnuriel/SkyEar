@@ -173,13 +173,20 @@ def _event_location(event: Any) -> tuple[float | None, float | None, float | Non
 
 def _event_bearing(event: Any) -> float | None:
     metadata = getattr(event, "metadata", {}) or {}
+    used_for_geo = getattr(event, "bearing_used_for_geo", None)
+    if used_for_geo is None:
+        used_for_geo = metadata.get("bearing_used_for_geo")
+    if used_for_geo is False or str(used_for_geo).strip().lower() == "false":
+        return None
     reliable = getattr(event, "bearing_reliable", None)
     if reliable is None:
         reliable = metadata.get("bearing_reliable")
     if reliable is False or str(reliable).strip().lower() == "false":
         return None
     for value in (
+        getattr(event, "tracked_bearing_deg", None),
         getattr(event, "estimated_azimuth_deg", None),
+        metadata.get("tracked_bearing_deg"),
         metadata.get("beam_bearing_deg"),
         metadata.get("bearing_deg"),
         metadata.get("estimated_azimuth_deg"),
@@ -215,18 +222,31 @@ def latest_candidate_bearings(events: list[Any], max_age_sec: float = 10.0, now:
         reliable = getattr(event, "bearing_reliable", None)
         if reliable is None:
             reliable = metadata.get("bearing_reliable")
+        quality = getattr(event, "bearing_quality", None) or metadata.get("bearing_quality")
+        if str(quality or "").lower() == "poor":
+            uncertainty = max(float(uncertainty), 60.0)
         reject_reason = getattr(event, "bearing_reject_reason", None) or metadata.get("bearing_reject_reason")
+        raw_bearing = getattr(event, "raw_bearing_deg", None)
+        if raw_bearing is None:
+            raw_bearing = metadata.get("raw_bearing_deg")
+        tracked_bearing = getattr(event, "tracked_bearing_deg", None)
+        if tracked_bearing is None:
+            tracked_bearing = metadata.get("tracked_bearing_deg")
         bearings.append(
             {
                 "station_id": getattr(event, "station_id"),
                 "latitude": lat,
                 "longitude": lon,
                 "bearing_deg": bearing,
+                "raw_bearing_deg": raw_bearing,
+                "tracked_bearing_deg": tracked_bearing,
                 "uncertainty_deg": float(uncertainty),
                 "beam_confidence_pct": getattr(event, "beam_confidence_pct", None) or metadata.get("beam_confidence_pct"),
                 "bearing_stable": getattr(event, "bearing_stable", None) or metadata.get("bearing_stable"),
                 "bearing_reliable": reliable,
                 "bearing_reject_reason": reject_reason,
+                "bearing_quality": quality,
+                "bearing_used_for_geo": True,
             }
         )
     return bearings
@@ -243,9 +263,11 @@ def estimate_from_recent_bearings(events: list[Any], max_age_sec: float = 10.0, 
         }
     if len(bearings) == 1:
         item = bearings[0]
+        quality = str(item.get("bearing_quality") or "")
+        confidence = 0.14 if quality == "poor" else 0.25
         return {
             "estimate_type": "station_sector",
-            "confidence": 0.25,
+            "confidence": confidence,
             "source_station_ids": [item["station_id"]],
             "area_polygon": bearing_sector_polygon(item["latitude"], item["longitude"], item["bearing_deg"], item["uncertainty_deg"], 25.0, 800.0),
             "reason": "single-station bearing cue; range unknown",
@@ -266,6 +288,8 @@ def estimate_from_recent_bearings(events: list[Any], max_age_sec: float = 10.0, 
     confidence = max(0.35, min(0.9, 1.0 - radius / 1000.0))
     quality = str(intersection.get("bearing_geometry_quality") or bearing_geometry_quality(bearings))
     confidence = confidence_for_bearing_geometry(confidence, quality)
+    if any(str(item.get("bearing_quality") or "") == "poor" for item in bearings):
+        confidence *= 0.65
     return {
         "estimate_type": "bearing_intersection" if len(bearings) == 2 else "multi_station_area",
         "latitude": intersection["latitude"],

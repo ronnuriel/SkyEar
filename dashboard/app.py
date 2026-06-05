@@ -44,12 +44,70 @@ def _draw_health_badge(health: dict | None):
         st.error(label)
 
 
+def _render_recording_controls(station_id: str, server_url: str, event: dict) -> None:
+    labels = [
+        "background",
+        "drone_off",
+        "takeoff",
+        "hover",
+        "flyby",
+        "landing",
+        "car",
+        "motorcycle",
+        "helicopter",
+        "fan",
+        "unknown_noise",
+    ]
+    st.warning("Recording may capture voices. Use only where permitted.")
+    try:
+        rec = requests.get(f"{server_url}/stations/{station_id}/recording/state", timeout=1.5).json()
+    except Exception:
+        rec = {"state": {}, "pending_commands": []}
+    state = rec.get("state") or {}
+    cols = st.columns(3)
+    cols[0].metric("Recording", "ON" if state.get("recording") else "OFF")
+    cols[1].metric("Duration", f"{float(state.get('duration_sec') or 0.0):.0f}s")
+    cols[2].metric("Folder", state.get("session_dir") or "n/a")
+    if rec.get("pending_commands"):
+        st.caption(f"Pending recording command(s): {len(rec['pending_commands'])}")
+    with st.expander("Recording controls"):
+        session_name = st.text_input("Session name", value="", key=f"rec_session_{station_id}")
+        label = st.selectbox("Marker label", labels, key=f"rec_label_{station_id}")
+        note = st.text_input("Note", value="", key=f"rec_note_{station_id}")
+        distance_m = st.number_input("Distance m", min_value=0.0, value=0.0, step=1.0, key=f"rec_dist_{station_id}")
+        drone_model = st.text_input("Drone model", value="", key=f"rec_model_{station_id}")
+        action_cols = st.columns(3)
+        if action_cols[0].button("Start", key=f"rec_start_{station_id}"):
+            requests.post(
+                f"{server_url}/stations/{station_id}/recording/start",
+                json={"session_name": session_name, "label": label, "note": note},
+                timeout=2,
+            )
+            st.rerun()
+        if action_cols[1].button("Stop", key=f"rec_stop_{station_id}"):
+            requests.post(f"{server_url}/stations/{station_id}/recording/stop", json={}, timeout=2)
+            st.rerun()
+        if action_cols[2].button("Mark", key=f"rec_mark_{station_id}"):
+            requests.post(
+                f"{server_url}/stations/{station_id}/recording/mark",
+                json={
+                    "label": label,
+                    "note": note,
+                    "distance_m": None if distance_m <= 0 else distance_m,
+                    "bearing_deg": event.get("tracked_bearing_deg") or event.get("estimated_azimuth_deg"),
+                    "drone_model": drone_model,
+                },
+                timeout=2,
+            )
+            st.rerun()
+
 def _render_station_card(
     station_id: str,
     event: dict,
     health: dict | None,
     fusion_level: int,
     show_inline_mini_spectrum: bool,
+    server_url: str,
 ):
     metadata = event.get("metadata") or {}
     station_id = event.get("station_id") or station_id
@@ -89,9 +147,23 @@ def _render_station_card(
 
         action_cols = st.columns(4)
         action_cols[0].metric("Operator action", operator_action_label(fusion_level, event).upper())
-        action_cols[1].metric("Bearing", event.get("estimated_azimuth_deg") if event.get("estimated_azimuth_deg") is not None else "n/a")
+        side = metadata.get("two_mic_side")
+        bearing_used = event.get("bearing_used_for_geo")
+        tracked_bearing = event.get("tracked_bearing_deg")
+        bearing_value = tracked_bearing if bearing_used is not False and tracked_bearing is not None else event.get("estimated_azimuth_deg")
+        if bearing_used is False:
+            bearing_display = "unreliable"
+        elif bearing_value is not None:
+            bearing_display = f"{float(bearing_value):.0f} deg"
+        else:
+            bearing_display = str(side or "n/a").upper()
+        action_cols[1].metric("Bearing / Side", bearing_display)
         action_cols[2].metric("Beam score", f"{float(event.get('beam_score') or 0.0):.3f}" if event.get("beam_score") is not None else "n/a")
-        action_cols[3].metric("Bearing stable", "yes" if event.get("bearing_stable") else "no")
+        action_cols[3].metric("Bearing track", event.get("bearing_track_status") or ("stable" if event.get("bearing_stable") else "n/a"))
+        if bearing_used is False:
+            st.caption("Bearing unreliable" + (f": {event.get('bearing_reject_reason')}" if event.get("bearing_reject_reason") else ""))
+
+        _render_recording_controls(station_id, server_url, event)
 
         detail_cols = st.columns(4)
         agreement = event.get("channel_agreement_count")
@@ -238,6 +310,7 @@ with stations_panel:
                         health_by_station.get(station_id),
                         fusion_level,
                         show_inline_mini_spectrum,
+                        server_url,
                     )
         st.subheader("Online stations without recent events")
         if heartbeat_only:

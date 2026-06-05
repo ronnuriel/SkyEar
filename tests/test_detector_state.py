@@ -40,6 +40,19 @@ def _harmonic(sec: float = 1.0, channels: int = 1) -> np.ndarray:
     return out
 
 
+def _harmonic_missing_fundamental(sec: float = 1.0, channels: int = 1) -> np.ndarray:
+    t = np.arange(int(SR * sec), dtype=np.float32) / SR
+    mono = np.zeros_like(t)
+    for k in range(2, 6):
+        mono += (0.05 / k) * np.sin(2 * np.pi * 700 * k * t)
+    if channels == 1:
+        return mono.astype(np.float32)
+    out = np.zeros((mono.size, channels), dtype=np.float32)
+    out[:, 0] = mono
+    out[:, 1:] = mono[:, None] * 0.8
+    return out
+
+
 def _calibrated_state(**overrides) -> StationDetectorState:
     state = StationDetectorState(_cfg(**overrides))
     state.update(_quiet(), SR, 0.0)
@@ -259,12 +272,16 @@ def test_one_high_hf_background_spike_stays_candidate_not_drone_like():
     assert frame.combined_drone_evidence_pct == 0.0
     assert frame.status == "suspect"
     assert frame.operator_label == "ml_drone_candidate"
-    assert frame.candidate_run == 1
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_run == 1
+    assert frame.acoustic_candidate_run == 0
+    assert frame.fused_candidate_run == 0
     assert frame.ml_positive_run == 1
     assert frame.strong_run == 0
+    assert frame.candidate_block_reason == "acoustic_below_candidate_support"
 
 
-def test_two_ml_high_windows_in_last_three_create_local_candidate():
+def test_two_ml_high_windows_in_last_three_stay_ml_only_candidate_without_acoustics():
     state = _calibrated_state(smoothing_enabled=False)
 
     state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
@@ -273,25 +290,30 @@ def test_two_ml_high_windows_in_last_three_create_local_candidate():
 
     assert state._ml_candidate_persistent() is True
     assert frame.status == "suspect"
-    assert frame.operator_label == "local_drone_candidate"
-    assert frame.candidate_run == 1
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_run == 1
+    assert frame.fused_candidate_run == 0
     assert frame.ml_positive_run == 1
 
 
-def test_two_consecutive_drone_candidates_create_local_candidate():
+def test_two_consecutive_ml_candidates_do_not_create_local_candidate_without_acoustics():
     state = _calibrated_state(smoothing_enabled=False)
 
     state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
     frame = state.update(_quiet(), SR, 4.0, hf_p_drone=0.96)
 
     assert frame.status == "suspect"
-    assert frame.operator_label == "local_drone_candidate"
-    assert frame.candidate_run == 2
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_run == 2
+    assert frame.acoustic_candidate_run == 0
+    assert frame.fused_candidate_run == 0
     assert frame.ml_positive_run == 2
-    assert frame.estimated_detection_delay_sec == 1.0
+    assert frame.estimated_detection_delay_sec is None
 
 
-def test_three_consecutive_candidates_without_harmonic_support_stay_local_candidate():
+def test_three_consecutive_candidates_without_harmonic_support_stay_ml_only():
     state = _calibrated_state(smoothing_enabled=False)
 
     state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
@@ -299,11 +321,15 @@ def test_three_consecutive_candidates_without_harmonic_support_stay_local_candid
     frame = state.update(_quiet(), SR, 5.0, hf_p_drone=0.97)
 
     assert frame.status == "suspect"
-    assert frame.operator_label == "local_drone_candidate"
-    assert frame.candidate_run == 3
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_run == 3
+    assert frame.acoustic_candidate_run == 0
+    assert frame.fused_candidate_run == 0
     assert frame.ml_positive_run == 3
     assert frame.strong_run == 0
     assert frame.combined_drone_evidence_pct == 0.0
+    assert frame.why_candidate_run_reset == "acoustic_below_candidate_support"
 
 
 def test_three_consecutive_ml_combined_windows_become_drone_like():
@@ -365,7 +391,7 @@ def test_hf_missing_single_channel_keeps_existing_harmonic_behavior():
     assert frame.operator_label == "acoustic_harmonic_source"
 
 
-def test_multichannel_agreement_and_stable_f0_can_alert_without_hf():
+def test_multichannel_agreement_and_stable_f0_without_hf_is_acoustic_only():
     state = _calibrated_state()
 
     state.update(_harmonic(channels=4), SR, 3.0)
@@ -374,7 +400,9 @@ def test_multichannel_agreement_and_stable_f0_can_alert_without_hf():
 
     assert frame.agreement_count >= 2
     assert frame.f0_stable is True
-    assert frame.status == "alert"
+    assert frame.status == "suspect"
+    assert frame.operator_label == "acoustic_harmonic_source"
+    assert frame.fused_candidate_run == 0
 
 
 def test_two_channel_harmonic_only_does_not_use_multichannel_alert_path():
@@ -389,7 +417,7 @@ def test_two_channel_harmonic_only_does_not_use_multichannel_alert_path():
     assert frame.status != "alert"
 
 
-def test_multichannel_agreement_and_stable_f0_can_alert_despite_negative_hf():
+def test_multichannel_agreement_and_stable_f0_negative_hf_does_not_alert():
     state = _calibrated_state()
 
     state.update(_harmonic(channels=4), SR, 3.0, hf_p_drone=0.001)
@@ -399,7 +427,9 @@ def test_multichannel_agreement_and_stable_f0_can_alert_despite_negative_hf():
     assert frame.hf_negative is True
     assert frame.agreement_count >= 2
     assert frame.f0_stable is True
-    assert frame.status == "alert"
+    assert frame.status == "suspect"
+    assert frame.operator_label in {"acoustic_harmonic_source", "non_drone_harmonic"}
+    assert frame.fused_candidate_run == 0
 
 
 def test_alert_hysteresis_holds_briefly_then_clears():
@@ -412,7 +442,8 @@ def test_alert_hysteresis_holds_briefly_then_clears():
     cleared = state.update(_quiet(), SR, 10.0)
 
     assert alert.status == "alert"
-    assert holding.status == "alert"
+    assert holding.status == "suspect"
+    assert holding.fused_candidate_run == 0
     assert cleared.status == "background"
 
 
@@ -596,11 +627,14 @@ def test_field_debug_candidate_run_cannot_emit_background_without_harmonic_suppo
 
     frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.78)
 
-    assert frame.candidate_run == 1
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_run == 1
+    assert frame.acoustic_candidate_run == 0
+    assert frame.fused_candidate_run == 0
     assert frame.status == "suspect"
     assert frame.operator_label == "ml_drone_candidate"
     assert frame.candidate_block_reason == "harmonic_below_candidate_support"
-    assert frame.why_candidate_run_reset == ""
+    assert frame.why_candidate_run_reset == "harmonic_below_candidate_support"
 
 
 def test_field_debug_local_candidate_cannot_emit_background():
@@ -639,6 +673,136 @@ def test_harmonic_below_candidate_support_is_not_reported_as_run_reset_while_inc
 
     frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.78)
 
-    assert frame.candidate_run == 1
+    assert frame.candidate_run == 0
+    assert frame.hf_candidate_run == 1
+    assert frame.fused_candidate_run == 0
     assert frame.candidate_block_reason == "harmonic_below_candidate_support"
-    assert frame.why_candidate_run_reset == ""
+    assert frame.why_candidate_run_reset == "harmonic_below_candidate_support"
+
+
+def test_ml_high_harmonic_zero_combined_zero_is_ml_candidate_only():
+    state = _calibrated_state(smoothing_enabled=False, allow_single_mic_alert=True)
+
+    frame = state.update(_quiet(), SR, 3.0, hf_p_drone=0.95)
+
+    assert frame.ml_drone_pct == 0.95
+    assert frame.harmonic_evidence_pct_smoothed == 0.0
+    assert frame.combined_drone_evidence_pct == 0.0
+    assert frame.hf_candidate_run == 1
+    assert frame.acoustic_candidate_run == 0
+    assert frame.fused_candidate_run == 0
+    assert frame.candidate_run == 0
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.decision_stage == "ml_drone_candidate"
+    assert frame.status != "alert"
+    assert frame.status != "drone_like"
+
+
+def test_ml_high_plus_stable_harmonic_becomes_local_candidate_after_persistence():
+    state = _calibrated_state(
+        detection_profile="field_debug",
+        allow_single_mic_alert=False,
+        smoothing_enabled=False,
+        min_alert_threshold=160.0,
+    )
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.95)
+    frame = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.95)
+
+    assert frame.hf_candidate_run == 2
+    assert frame.acoustic_candidate_run == 2
+    assert frame.fused_candidate_run == 2
+    assert frame.candidate_run == 2
+    assert frame.operator_label == "local_drone_candidate"
+    assert frame.decision_stage == "local_drone_candidate"
+
+
+def test_stale_ml_high_with_low_harmonic_resets_fused_candidate():
+    state = _calibrated_state(
+        smoothing_enabled=False,
+        allow_single_mic_alert=True,
+        min_alert_threshold=160.0,
+        max_hf_age_sec=6.0,
+        max_acoustic_age_sec=6.0,
+    )
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.95)
+    local = state.update(_harmonic(), SR, 4.5, hf_p_drone=0.95)
+    frame = state.update(_quiet(), SR, 12.0, hf_p_drone=0.95, hf_age_sec=7.0)
+
+    assert local.fused_candidate_run >= 2
+    assert frame.hf_age_sec is not None and frame.hf_age_sec > frame.max_hf_age_sec
+    assert frame.harmonic_age_sec is not None and frame.harmonic_age_sec > frame.max_acoustic_age_sec
+    assert frame.hf_candidate_pass is False
+    assert frame.harmonic_pass is False
+    assert frame.fused_candidate_run == 0
+    assert frame.candidate_run == 0
+    assert frame.status != "alert"
+
+
+def test_harmonic_high_ml_low_is_non_drone_harmonic_without_alert():
+    state = _calibrated_state(allow_single_mic_alert=True)
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.05)
+    state.update(_harmonic(), SR, 4.5, hf_p_drone=0.05)
+    frame = state.update(_harmonic(), SR, 6.1, hf_p_drone=0.05)
+
+    assert frame.harmonic_evidence_pct > 0.0
+    assert frame.hf_negative is True
+    assert frame.fused_candidate_run == 0
+    assert frame.operator_label in {"acoustic_harmonic_source", "non_drone_harmonic"}
+    assert frame.status != "alert"
+
+
+def test_alert_requires_fused_evidence_not_ml_only():
+    state = _calibrated_state(smoothing_enabled=False, allow_single_mic_alert=True)
+
+    for idx in range(5):
+        frame = state.update(_quiet(), SR, 3.0 + idx, hf_p_drone=0.99)
+
+    assert frame.hf_candidate_run >= 5
+    assert frame.acoustic_candidate_run == 0
+    assert frame.fused_candidate_run == 0
+    assert frame.combined_drone_evidence_pct == 0.0
+    assert frame.operator_label == "ml_drone_candidate"
+    assert frame.status != "alert"
+    assert frame.status != "drone_like"
+
+
+def test_harmonic_track_locks_on_stable_ridges():
+    state = _calibrated_state(
+        harmonic_lock_enabled=True,
+        harmonic_lock_min_duration_sec=2.0,
+        min_alert_threshold=160.0,
+    )
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.95)
+    state.update(_harmonic(), SR, 4.5, hf_p_drone=0.95)
+    frame = state.update(_harmonic(), SR, 6.1, hf_p_drone=0.95)
+
+    assert frame.harmonic_track_active is True
+    assert frame.f0_raw_hz is not None
+    assert frame.f0_track_hz is not None
+    assert abs(frame.f0_track_hz - 700) <= 80
+    assert frame.harmonic_track_age_sec >= 2.0
+    assert frame.stable_harmonic_ridge_count >= 3
+    assert frame.longest_ridge_duration_sec >= frame.harmonic_track_age_sec
+
+
+def test_harmonic_track_holds_when_fundamental_is_missing_but_ridges_continue():
+    state = _calibrated_state(
+        harmonic_lock_enabled=True,
+        harmonic_lock_min_duration_sec=2.0,
+        harmonic_lock_hold_sec=5.0,
+        min_alert_threshold=160.0,
+    )
+
+    state.update(_harmonic(), SR, 3.0, hf_p_drone=0.95)
+    state.update(_harmonic(), SR, 4.5, hf_p_drone=0.95)
+    state.update(_harmonic(), SR, 6.1, hf_p_drone=0.95)
+    frame = state.update(_harmonic_missing_fundamental(), SR, 7.2, hf_p_drone=0.95)
+
+    assert frame.harmonic_track_active is True
+    assert frame.f0_track_hz is not None
+    assert abs(frame.f0_track_hz - 700) <= 80
+    assert frame.stable_harmonic_ridge_count >= 3

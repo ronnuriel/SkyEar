@@ -29,7 +29,15 @@ def bearing_ray_rows(events: list[dict], ray_length_m: float = 500.0) -> list[di
     rows = []
     for event in events:
         loc = event.get("station_location") or {}
-        bearing = event.get("estimated_azimuth_deg") or event.get("bearing_deg")
+        if event.get("bearing_reliable") is False or event.get("bearing_used_for_geo") is False:
+            continue
+        bearing = (
+            event.get("tracked_bearing_deg")
+            if event.get("tracked_bearing_deg") is not None
+            else event.get("estimated_azimuth_deg")
+            if event.get("estimated_azimuth_deg") is not None
+            else event.get("bearing_deg")
+        )
         if bearing is None or loc.get("latitude") is None or loc.get("longitude") is None:
             continue
         lat = float(loc["latitude"])
@@ -45,6 +53,8 @@ def bearing_ray_rows(events: list[dict], ray_length_m: float = 500.0) -> list[di
                 "lat": lat,
                 "lon": lon,
                 "bearing_deg": float(bearing),
+                "raw_bearing_deg": event.get("raw_bearing_deg"),
+                "tracked_bearing_deg": event.get("tracked_bearing_deg"),
                 "ray_end_lat": end_lat,
                 "ray_end_lon": end_lon,
                 "beam_score": event.get("beam_score"),
@@ -77,11 +87,21 @@ def sector_polygon_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
     for cue in normalize_map_state(map_state)["bearing_cues"]:
         polygon = cue.get("sector_polygon") or []
         if len(polygon) >= 3:
+            quality = str(cue.get("bearing_quality") or "")
+            fill_alpha = 28 if quality == "poor" else 48
+            line_alpha = 90 if quality == "poor" else 170
             rows.append(
                 {
                     "station_id": cue.get("station_id"),
                     "bearing_deg": cue.get("bearing_deg"),
+                    "raw_bearing_deg": cue.get("raw_bearing_deg"),
+                    "tracked_bearing_deg": cue.get("tracked_bearing_deg"),
                     "uncertainty_deg": cue.get("uncertainty_deg"),
+                    "bearing_quality": cue.get("bearing_quality"),
+                    "bearing_reject_reason": cue.get("bearing_reject_reason"),
+                    "bearing_used_for_geo": cue.get("bearing_used_for_geo"),
+                    "fill_color": [255, 120, 20, fill_alpha],
+                    "line_color": [255, 80, 20, line_alpha],
                     "polygon": [[point["longitude"], point["latitude"]] for point in polygon],
                 }
             )
@@ -153,8 +173,8 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
                 "PolygonLayer",
                 data=sectors,
                 get_polygon="polygon",
-                get_fill_color=[255, 120, 20, 45],
-                get_line_color=[255, 80, 20, 160],
+                get_fill_color="fill_color",
+                get_line_color="line_color",
                 line_width_min_pixels=1,
                 pickable=True,
             )

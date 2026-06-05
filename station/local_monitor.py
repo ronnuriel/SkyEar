@@ -71,6 +71,13 @@ def history_row_from_event(event: AcousticEvent) -> dict[str, Any]:
         "best_f0_hz": event.best_f0_hz,
         "rms": event.rms,
         "candidate_run": event.candidate_run if event.candidate_run is not None else metadata.get("candidate_run"),
+        "hf_candidate_run": event.hf_candidate_run if event.hf_candidate_run is not None else metadata.get("hf_candidate_run"),
+        "acoustic_candidate_run": event.acoustic_candidate_run
+        if event.acoustic_candidate_run is not None
+        else metadata.get("acoustic_candidate_run"),
+        "fused_candidate_run": event.fused_candidate_run
+        if event.fused_candidate_run is not None
+        else metadata.get("fused_candidate_run"),
         "ml_positive_run": event.ml_positive_run if event.ml_positive_run is not None else metadata.get("ml_positive_run"),
         "strong_run": event.strong_run if event.strong_run is not None else metadata.get("strong_run"),
         "decision_stage": event.decision_stage if event.decision_stage is not None else metadata.get("decision_stage"),
@@ -87,6 +94,22 @@ def history_row_from_event(event: AcousticEvent) -> dict[str, Any]:
         "why_candidate_run_reset": event.why_candidate_run_reset
         if event.why_candidate_run_reset is not None
         else metadata.get("why_candidate_run_reset"),
+        "harmonic_track_active": event.harmonic_track_active
+        if event.harmonic_track_active is not None
+        else metadata.get("harmonic_track_active"),
+        "f0_track_hz": event.f0_track_hz if event.f0_track_hz is not None else metadata.get("f0_track_hz"),
+        "f0_raw_hz": event.f0_raw_hz if event.f0_raw_hz is not None else metadata.get("f0_raw_hz"),
+        "raw_bearing_deg": event.raw_bearing_deg if event.raw_bearing_deg is not None else metadata.get("raw_bearing_deg"),
+        "tracked_bearing_deg": event.tracked_bearing_deg
+        if event.tracked_bearing_deg is not None
+        else metadata.get("tracked_bearing_deg"),
+        "bearing_track_status": event.bearing_track_status or metadata.get("bearing_track_status"),
+        "bearing_flip_suppressed": event.bearing_flip_suppressed
+        if event.bearing_flip_suppressed is not None
+        else metadata.get("bearing_flip_suppressed"),
+        "bearing_used_for_geo": event.bearing_used_for_geo
+        if event.bearing_used_for_geo is not None
+        else metadata.get("bearing_used_for_geo"),
     }
 
 
@@ -101,12 +124,33 @@ def build_local_monitor_snapshot(
     hf_result: Any = None,
     beam_result: Any = None,
     server_state: Mapping[str, Any] | None = None,
+    recording_state: Mapping[str, Any] | None = None,
     updated_unix: float | None = None,
 ) -> dict[str, Any]:
     metadata = event.metadata or {}
     updated_unix = time.time() if updated_unix is None else float(updated_unix)
     beam = {
         "estimated_azimuth_deg": event.estimated_azimuth_deg,
+        "raw_bearing_deg": event.raw_bearing_deg if event.raw_bearing_deg is not None else metadata.get("raw_bearing_deg"),
+        "tracked_bearing_deg": event.tracked_bearing_deg
+        if event.tracked_bearing_deg is not None
+        else metadata.get("tracked_bearing_deg"),
+        "bearing_velocity_deg_per_sec": event.bearing_velocity_deg_per_sec
+        if event.bearing_velocity_deg_per_sec is not None
+        else metadata.get("bearing_velocity_deg_per_sec"),
+        "bearing_track_age_sec": event.bearing_track_age_sec
+        if event.bearing_track_age_sec is not None
+        else metadata.get("bearing_track_age_sec"),
+        "bearing_track_stable": event.bearing_track_stable
+        if event.bearing_track_stable is not None
+        else metadata.get("bearing_track_stable"),
+        "bearing_track_status": event.bearing_track_status or metadata.get("bearing_track_status"),
+        "bearing_flip_suppressed": event.bearing_flip_suppressed
+        if event.bearing_flip_suppressed is not None
+        else metadata.get("bearing_flip_suppressed"),
+        "bearing_used_for_geo": event.bearing_used_for_geo
+        if event.bearing_used_for_geo is not None
+        else metadata.get("bearing_used_for_geo"),
         "direction_confidence": event.direction_confidence,
         "beamforming_method": event.beamforming_method or metadata.get("beamforming_method"),
         "beam_score": event.beam_score if event.beam_score is not None else metadata.get("beam_score"),
@@ -144,6 +188,13 @@ def build_local_monitor_snapshot(
         "bearing_uncertainty_deg": event.bearing_uncertainty_deg
         if event.bearing_uncertainty_deg is not None
         else metadata.get("bearing_uncertainty_deg"),
+        "two_mic_direction_enabled": metadata.get("two_mic_direction_enabled"),
+        "two_mic_side": metadata.get("two_mic_side"),
+        "two_mic_delay_us": metadata.get("two_mic_delay_us"),
+        "two_mic_confidence": metadata.get("two_mic_confidence"),
+        "two_mic_peak_ratio": metadata.get("two_mic_peak_ratio"),
+        "two_mic_reason": metadata.get("two_mic_reason"),
+        "two_mic_spacing_m": metadata.get("two_mic_spacing_m"),
     }
     if beam_result is not None:
         beam["beam_scan_deg"] = getattr(beam_result, "beam_scan_deg", None)
@@ -176,6 +227,7 @@ def build_local_monitor_snapshot(
         },
         "beam": beam,
         "server": dict(server_state or {}),
+        "recording": dict(recording_state or {}),
     }
 
 

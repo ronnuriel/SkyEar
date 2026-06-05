@@ -9,6 +9,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
 
 from dashboard.station_view import format_pct, render_decision_bars, status_label
@@ -41,6 +42,7 @@ def parse_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         "harmonic_lines": snapshot.get("harmonic_lines") or [],
         "hf": snapshot.get("hf") or {},
         "beam": snapshot.get("beam") or {},
+        "recording": snapshot.get("recording") or {},
         "server": snapshot.get("server") or {},
         "station_id": event.get("station_id") or "unknown station",
         "station_name": event.get("station_name"),
@@ -205,6 +207,60 @@ def _show_warnings(snapshot: dict[str, Any], event: dict[str, Any], hf: dict[str
             st.success("No local warnings")
 
 
+def _show_recording_controls(recording: dict[str, Any], event: dict[str, Any]) -> None:
+    labels = [
+        "background",
+        "drone_off",
+        "takeoff",
+        "hover",
+        "flyby",
+        "landing",
+        "car",
+        "motorcycle",
+        "helicopter",
+        "fan",
+        "unknown_noise",
+    ]
+    st.warning("Recording may capture voices. Use only where permitted.")
+    cols = st.columns(4)
+    cols[0].metric("Recording", "ON" if recording.get("recording") else "OFF")
+    cols[1].metric("Duration", f"{float(recording.get('duration_sec') or 0.0):.0f}s")
+    cols[2].metric("Current file", recording.get("current_file") or "n/a")
+    cols[3].metric("Folder", recording.get("session_dir") or "n/a")
+    with st.container(border=True):
+        st.markdown("#### Recording controls")
+        session_name = st.text_input("Session name", value="home_test")
+        label = st.selectbox("Marker label", labels)
+        note = st.text_input("Note", value="")
+        distance_m = st.number_input("Distance m", min_value=0.0, value=0.0, step=1.0)
+        drone_model = st.text_input("Drone model", value="")
+        control_url = "http://127.0.0.1:8765"
+        action_cols = st.columns(3)
+        if action_cols[0].button("Start recording"):
+            requests.post(
+                f"{control_url}/recording/start",
+                json={"session_name": session_name, "label": label, "note": note},
+                timeout=2,
+            )
+            st.rerun()
+        if action_cols[1].button("Stop recording"):
+            requests.post(f"{control_url}/recording/stop", json={}, timeout=2)
+            st.rerun()
+        if action_cols[2].button("Mark event"):
+            requests.post(
+                f"{control_url}/recording/mark",
+                json={
+                    "label": label,
+                    "note": note,
+                    "distance_m": None if distance_m <= 0 else distance_m,
+                    "bearing_deg": event.get("tracked_bearing_deg") or event.get("estimated_azimuth_deg"),
+                    "drone_model": drone_model,
+                },
+                timeout=2,
+            )
+            st.rerun()
+
+
 def main() -> None:
     args = parse_args()
     state_path = Path(args.state)
@@ -233,6 +289,7 @@ def main() -> None:
     event = snapshot["event"]
     hf = snapshot["hf"]
     beam = snapshot["beam"]
+    recording = snapshot["recording"]
     server = snapshot["server"]
     title = snapshot["station_id"]
     if snapshot.get("station_name"):
@@ -246,6 +303,7 @@ def main() -> None:
         _show_status(event)
     with warnings_panel:
         _show_warnings(snapshot, event, hf, server)
+    _show_recording_controls(recording, event)
 
     cols = st.columns(6)
     cols[0].metric("HF drone", _metric_pct(event.get("hf_p_drone") or hf.get("p_drone")))
@@ -256,17 +314,50 @@ def main() -> None:
     cols[5].metric("Candidate run", _event_value(event, "candidate_run") or 0)
 
     beam_cols = st.columns(6)
-    beam_cols[0].metric("Bearing", beam.get("estimated_azimuth_deg") if beam.get("estimated_azimuth_deg") is not None else "n/a")
+    tracked_bearing = beam.get("tracked_bearing_deg")
+    raw_bearing = beam.get("raw_bearing_deg")
+    bearing_used = beam.get("bearing_used_for_geo")
+    if bearing_used is False:
+        bearing_display = "unreliable"
+    elif tracked_bearing is not None:
+        bearing_display = f"{float(tracked_bearing):.0f} deg"
+    else:
+        bearing_display = "n/a"
+    beam_cols[0].metric("Bearing", bearing_display)
     beam_cols[1].metric("Beam score", f"{float(beam.get('beam_score') or 0.0):.3f}" if beam.get("beam_score") is not None else "n/a")
     beam_cols[2].metric("Beam confidence", _metric_pct(beam.get("beam_confidence_pct")))
     beam_cols[3].metric("Beam SNR", f"{float(beam.get('beam_snr_gain_db') or 0.0):.1f} dB" if beam.get("beam_snr_gain_db") is not None else "n/a")
-    beam_cols[4].metric("Bearing stable", "yes" if beam.get("bearing_stable") else "no")
+    beam_cols[4].metric("Track", str(beam.get("bearing_track_status") or "n/a"))
     beam_cols[5].metric("Server", "send failed" if server.get("last_send_error") else "ok")
+    side = beam.get("two_mic_side")
+    if beam.get("two_mic_direction_enabled"):
+        side_cols = st.columns(4)
+        side_cols[0].metric("Two-mic side", str(side or "n/a").upper())
+        side_cols[1].metric(
+            "Two-mic delay",
+            f"{float(beam.get('two_mic_delay_us')):.0f} us" if beam.get("two_mic_delay_us") is not None else "n/a",
+        )
+        side_cols[2].metric("Two-mic confidence", _metric_pct(beam.get("two_mic_confidence")))
+        side_cols[3].metric(
+            "Two-mic peak",
+            f"{float(beam.get('two_mic_peak_ratio')):.2f}x" if beam.get("two_mic_peak_ratio") is not None else "n/a",
+        )
+        if beam.get("two_mic_reason"):
+            st.caption(f"Two-mic side reason: {beam.get('two_mic_reason')}")
     st.caption(
         "Bearing quality: "
         f"{beam.get('bearing_quality') or 'n/a'}"
         + (f" ({beam.get('bearing_reject_reason')})" if beam.get("bearing_reject_reason") else "")
     )
+    if raw_bearing is not None or tracked_bearing is not None:
+        st.caption(
+            "Bearing track: "
+            + (f"raw {float(raw_bearing):.0f} deg, " if raw_bearing is not None else "raw n/a, ")
+            + (f"tracked {float(tracked_bearing):.0f} deg, " if tracked_bearing is not None else "tracked n/a, ")
+            + f"stable={'yes' if beam.get('bearing_track_stable') else 'no'}"
+        )
+    if bearing_used is False:
+        st.warning("Bearing unreliable" + (f": {beam.get('bearing_reject_reason')}" if beam.get("bearing_reject_reason") else ""))
     metadata = event.get("metadata") or {}
     lat = event.get("station_latitude") or metadata.get("latitude")
     lon = event.get("station_longitude") or metadata.get("longitude")
@@ -275,7 +366,9 @@ def main() -> None:
         st.caption(f"Station location: {lat}, {lon}" + (f" ({label})" if label else ""))
     else:
         st.warning("Station location missing")
-    bearing = beam.get("estimated_azimuth_deg") or event.get("estimated_azimuth_deg")
+    bearing = tracked_bearing if bearing_used is not False else None
+    if bearing is None and bearing_used is not False:
+        bearing = beam.get("estimated_azimuth_deg") or event.get("estimated_azimuth_deg")
     uncertainty = beam.get("bearing_uncertainty_deg") or event.get("bearing_uncertainty_deg")
     if bearing is not None:
         if uncertainty is not None:

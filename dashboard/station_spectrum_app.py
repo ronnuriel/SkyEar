@@ -113,9 +113,19 @@ else:
 
     bearing_cols = st.columns(4)
     bearing_cols[0].metric("Operator action", operator_action_label(0, event).upper())
-    bearing_cols[1].metric("Bearing", event.get("estimated_azimuth_deg") if event.get("estimated_azimuth_deg") is not None else "n/a")
+    bearing_used = event.get("bearing_used_for_geo")
+    tracked_bearing = event.get("tracked_bearing_deg")
+    if bearing_used is False:
+        bearing_display = "unreliable"
+    elif tracked_bearing is not None:
+        bearing_display = f"{float(tracked_bearing):.0f} deg"
+    elif event.get("estimated_azimuth_deg") is not None:
+        bearing_display = f"{float(event['estimated_azimuth_deg']):.0f} deg"
+    else:
+        bearing_display = "n/a"
+    bearing_cols[1].metric("Bearing", bearing_display)
     bearing_cols[2].metric("Beam score", f"{float(event.get('beam_score') or 0.0):.3f}" if event.get("beam_score") is not None else "n/a")
-    bearing_cols[3].metric("Bearing stable", "yes" if event.get("bearing_stable") else "no")
+    bearing_cols[3].metric("Bearing track", event.get("bearing_track_status") or ("stable" if event.get("bearing_stable") else "n/a"))
 
     if metadata.get("demo_phase"):
         st.info(f"Demo phase: {metadata['demo_phase']}")

@@ -22,6 +22,11 @@ ARRAY_PROFILES: dict[str, dict] = {
         "sync_mode": "mono",
         "channel_mode": "mono",
     },
+    "volt2_dual_mic": {
+        "channels": 2,
+        "sync_mode": "unsynchronized",
+        "channel_mode": "dual_mic",
+    },
     "compact_8ch_r0_12m": {
         "channels": 8,
         "radius_m": 0.12,

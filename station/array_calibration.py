@@ -20,6 +20,8 @@ class ArrayCalibration:
     bad_channels: list[int]
     channel_rms: list[float]
     channel_health: list[str]
+    calibration_valid: bool = True
+    calibration_type: str = "measured"
     source_path: str | None = None
 
 
@@ -105,7 +107,8 @@ def build_calibration(
     for idx, value in enumerate(rms):
         if value < min_rms or (median_rms > 0 and value < median_rms * float(dropout_ratio)):
             detected_bad.add(idx)
-            health[idx] = "dropout" if value >= min_rms else "dead"
+            health[idx] = "dropout" if value >= min_rms else "silent"
+    calibration_valid = bool(channels > 0 and any(value > float(min_rms) for value in rms) and not detected_bad)
     delays = (
         estimate_delay_correction_samples(ordered, max_lag_samples=max_lag_samples)
         if estimate_delay and channels >= 2
@@ -123,6 +126,8 @@ def build_calibration(
         "bad_channels": sorted(detected_bad),
         "channel_rms": rms,
         "channel_health": health,
+        "calibration_valid": calibration_valid,
+        "calibration_type": "measured",
     }
 
 
@@ -136,16 +141,25 @@ def load_calibration(path: str | Path | None) -> ArrayCalibration | None:
     gains = payload.get("gain_correction") or [1.0] * len(order)
     delays = payload.get("delay_correction_samples") or [0.0] * len(order)
     bad = payload.get("bad_channels") or payload.get("dead_channels") or []
-    rms = payload.get("channel_rms") or [0.0] * len(order)
-    health = payload.get("channel_health") or ["ok"] * len(order)
+    rms = [float(value) for value in (payload.get("channel_rms") or [0.0] * len(order))]
+    bad = [int(idx) for idx in bad]
+    health = _normalized_channel_health(payload.get("channel_health") or ["ok"] * len(order), rms, bad)
+    explicit_valid = payload.get("calibration_valid")
+    calibration_valid = validate_calibration_payload({**payload, "channel_rms": rms, "channel_health": health, "bad_channels": bad})[
+        "calibration_valid"
+    ]
+    if explicit_valid is not None:
+        calibration_valid = bool(explicit_valid) and calibration_valid
     return ArrayCalibration(
         channel_count=channel_count,
         input_channel_order=[int(idx) for idx in order],
         gain_correction=[float(value) for value in gains],
         delay_correction_samples=[float(value) for value in delays],
-        bad_channels=[int(idx) for idx in bad],
-        channel_rms=[float(value) for value in rms],
-        channel_health=[str(value) for value in health],
+        bad_channels=bad,
+        channel_rms=rms,
+        channel_health=health,
+        calibration_valid=calibration_valid,
+        calibration_type=str(payload.get("calibration_type") or ("measured" if calibration_valid else "placeholder")),
         source_path=str(path),
     )
 
@@ -160,6 +174,8 @@ def apply_array_calibration(
         return array.astype(np.float32), mic_positions_m, _calibration_metadata(None, channel_rms(array))
     if isinstance(calibration, dict):
         calibration = _calibration_from_dict(calibration)
+    if not calibration.calibration_valid:
+        return array.astype(np.float32), mic_positions_m, _calibration_metadata(calibration, channel_rms(array))
     if max(calibration.input_channel_order, default=-1) >= array.shape[1]:
         raise ValueError("calibration input_channel_order references a missing audio channel")
 
@@ -211,6 +227,14 @@ def _calibration_from_dict(payload: dict[str, Any]) -> ArrayCalibration:
     path = payload.get("source_path")
     channel_count = int(payload.get("channel_count") or len(payload.get("input_channel_order") or []))
     order = payload.get("input_channel_order") or payload.get("channel_permutation") or list(range(channel_count))
+    rms = [float(value) for value in payload.get("channel_rms", [0.0] * len(order))]
+    bad = [int(idx) for idx in payload.get("bad_channels", [])]
+    health = _normalized_channel_health(payload.get("channel_health", ["ok"] * len(order)), rms, bad)
+    valid = validate_calibration_payload({**payload, "channel_rms": rms, "channel_health": health, "bad_channels": bad})[
+        "calibration_valid"
+    ]
+    if payload.get("calibration_valid") is not None:
+        valid = bool(payload.get("calibration_valid")) and valid
     return ArrayCalibration(
         channel_count=channel_count,
         input_channel_order=[int(idx) for idx in order],
@@ -218,9 +242,11 @@ def _calibration_from_dict(payload: dict[str, Any]) -> ArrayCalibration:
         delay_correction_samples=[
             float(value) for value in payload.get("delay_correction_samples", [0.0] * len(order))
         ],
-        bad_channels=[int(idx) for idx in payload.get("bad_channels", [])],
-        channel_rms=[float(value) for value in payload.get("channel_rms", [0.0] * len(order))],
-        channel_health=[str(value) for value in payload.get("channel_health", ["ok"] * len(order))],
+        bad_channels=bad,
+        channel_rms=rms,
+        channel_health=health,
+        calibration_valid=valid,
+        calibration_type=str(payload.get("calibration_type") or ("measured" if valid else "placeholder")),
         source_path=None if path is None else str(path),
     )
 
@@ -234,9 +260,46 @@ def _calibration_metadata(
     return {
         "calibration_loaded": calibration is not None,
         "calibration_file": None if calibration is None else calibration.source_path,
+        "calibration_valid": False if calibration is None else calibration.calibration_valid,
+        "calibration_type": None if calibration is None else calibration.calibration_type,
         "channel_rms": rms,
         "channel_health": [] if calibration is None else calibration.channel_health,
         "bad_channels": [] if calibration is None else calibration.bad_channels,
         "kept_channels": list(range(len(rms))) if kept_channels is None else kept_channels,
         "input_channel_order": None if calibration is None else calibration.input_channel_order,
     }
+
+
+def validate_calibration_payload(payload: dict[str, Any], *, min_rms: float = 1e-8) -> dict[str, Any]:
+    channel_count = int(payload.get("channel_count") or len(payload.get("channel_rms") or []))
+    rms = [float(value) for value in (payload.get("channel_rms") or [0.0] * channel_count)]
+    bad = [int(idx) for idx in payload.get("bad_channels", [])]
+    health = _normalized_channel_health(payload.get("channel_health") or ["ok"] * len(rms), rms, bad, min_rms=min_rms)
+    has_signal = any(value > float(min_rms) for value in rms)
+    silent = [idx for idx, value in enumerate(rms) if value <= float(min_rms)]
+    valid = bool(channel_count > 0 and has_signal and not silent)
+    return {
+        "calibration_valid": valid,
+        "channel_health": health,
+        "silent_channels": silent,
+    }
+
+
+def _normalized_channel_health(
+    health: list[str],
+    rms: list[float],
+    bad_channels: list[int],
+    *,
+    min_rms: float = 1e-8,
+) -> list[str]:
+    out = [str(value) for value in list(health)]
+    if len(out) < len(rms):
+        out.extend(["unknown"] * (len(rms) - len(out)))
+    out = out[: len(rms)]
+    bad = set(int(idx) for idx in bad_channels)
+    for idx, value in enumerate(rms):
+        if idx in bad:
+            out[idx] = "bad" if out[idx] == "ok" else out[idx]
+        if float(value) <= float(min_rms):
+            out[idx] = "silent"
+    return out

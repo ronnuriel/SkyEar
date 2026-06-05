@@ -561,6 +561,60 @@ skyear-run-benchmarks \
   --output-dir reports/benchmark_run
 ```
 
+## Recording Experiments
+
+SkyEar can record full raw audio locally on the station machine for home and field experiments. Raw audio is not uploaded to the central server by default; dashboard/server controls only send commands.
+
+Privacy note: recording may capture voices. Use only where permitted.
+
+Station config:
+
+```yaml
+recording:
+  enabled: true
+  root: runtime/recordings
+  chunk_sec: 60
+  format: wav
+  auto_record_on_candidate: false
+  pre_roll_sec: 10
+  max_session_sec: 3600
+  max_disk_gb: 20
+  local_control_enabled: true
+  local_control_host: 127.0.0.1
+  local_control_port: 8765
+```
+
+Start/stop from the dashboard station card, or from the local monitor when the server is down. The local monitor talks directly to `http://127.0.0.1:8765`, so files stay on the station.
+
+CLI controls:
+
+```bash
+skyear-recording-start --config configs/config_station.yaml --session-name home_test
+skyear-recording-mark --config configs/config_station.yaml --label hover --note "DJI Neo 20m" --distance-m 20 --drone-model "DJI Neo"
+skyear-recording-stop --config configs/config_station.yaml
+```
+
+Each session is saved under `runtime/recordings/<session_id>/` with chunked WAV files, `metadata.json`, `markers.csv`, and `station_config_snapshot.json`.
+
+Build a local recording manifest:
+
+```bash
+skyear-build-recording-manifest \
+  --root runtime/recordings \
+  --output data/manifests/local_recordings_manifest.csv
+```
+
+Then stream/evaluate with the existing manifest tools:
+
+```bash
+skyear-stream-manifest \
+  --manifest data/manifests/local_recordings_manifest.csv \
+  --config configs/config_station.yaml \
+  --mode offline
+
+skyear-eval-recording-session --session runtime/recordings/<session_id>
+```
+
 ## Field Test Sessions
 
 Use field session tools to make real tests reproducible and useful for later evaluation.
@@ -628,11 +682,27 @@ station:
 
 A single station can show a range-unknown bearing sector. An approximate candidate area requires at least two recent stations with valid passive bearings, or a simulated/known source used for testing.
 
+Bearing convention is geographic: `0 deg = north`, `90 deg = east`, `180 deg = south`, `270 deg = west`. `station.heading_offset_deg` is applied once by the station before it sends events; the dashboard and `/map/state` should display the sent geographic bearing without adding another offset.
+
 Map smoke test:
 
 ```bash
 bash scripts/map_smoke_test.sh
 ```
+
+### Direction jumps left/right
+
+If the dashboard, map, or local monitor jumps between left/right lobes, first check whether the bearing is marked `poor` or `unreliable`. SkyEar now sends both `raw_bearing_deg` and `tracked_bearing_deg`; map/geo uses only bearings marked `bearing_used_for_geo=true`.
+
+Common causes:
+
+- Channel order does not match the configured mic geometry.
+- The array calibration is placeholder/invalid or has silent channels.
+- `heading_offset_deg` is wrong, or was mentally applied twice while interpreting the map.
+- The source is broad-band/multipath-heavy, creating a second lobe with similar `second_peak_ratio`.
+- The mics are unsynchronized or too close for precise beamforming at the dominant frequency.
+
+Useful debug fields are `bearing_quality`, `bearing_reject_reason`, `bearing_flip_suppressed`, `bearing_track_status`, `raw_bearing_deg`, and `tracked_bearing_deg`. For `poor` bearings, the map shows a wider/faded sector. For `unreliable` bearings, precise map sectors are hidden.
 
 ## Security For Field Use
 

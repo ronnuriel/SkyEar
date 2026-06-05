@@ -53,6 +53,15 @@ class StationDetectorStateConfig:
     ml_spike_single_window_caps_to_candidate: bool = True
     ml_strong_recent_window_sec: float = 3.0
     f0_family_tolerance_hz: float = 140.0
+    max_hf_age_sec: float = 6.0
+    max_acoustic_age_sec: float = 6.0
+    harmonic_lock_enabled: bool = True
+    harmonic_lock_min_duration_sec: float = 3.0
+    harmonic_lock_hold_sec: float = 5.0
+    harmonic_f0_jump_penalty: float = 0.5
+    harmonic_ridge_max_drift_hz: float = 80.0
+    harmonic_track_bandwidth_hz: float = 120.0
+    harmonic_noise_floor_rolling_median_sec: float = 10.0
 
 
 @dataclass
@@ -95,8 +104,15 @@ class StationDetectionFrame:
     decision_reason: str = "no acoustic evidence"
     operator_label: str = "background"
     candidate_run: int = 0
+    hf_candidate_run: int = 0
+    acoustic_candidate_run: int = 0
+    fused_candidate_run: int = 0
     ml_positive_run: int = 0
     strong_run: int = 0
+    hf_age_sec: Optional[float] = None
+    harmonic_age_sec: Optional[float] = None
+    max_hf_age_sec: float = 6.0
+    max_acoustic_age_sec: float = 6.0
     estimated_detection_delay_sec: Optional[float] = None
     raw_best_f0_hz: Optional[int] = None
     canonical_best_f0_hz: Optional[int] = None
@@ -114,6 +130,15 @@ class StationDetectionFrame:
     alert_block_reason: str = ""
     alert_blocked_reason: str = ""
     why_candidate_run_reset: str = ""
+    harmonic_track_active: bool = False
+    tracked_f0_hz: Optional[int] = None
+    tracked_ridges: list[dict[str, float | int]] = field(default_factory=list)
+    harmonic_track_age_sec: float = 0.0
+    f0_raw_hz: Optional[int] = None
+    f0_track_hz: Optional[int] = None
+    f0_jump_reason: str = ""
+    stable_harmonic_ridge_count: int = 0
+    longest_ridge_duration_sec: float = 0.0
 
 
 def _sigmoid_score(score: float, threshold: float) -> float:
@@ -165,10 +190,18 @@ class StationDetectorState:
         self.ml_watch_history: list[bool] = []
         self.ml_candidate_history: list[bool] = []
         self.ml_strong_history: list[bool] = []
+        self.acoustic_candidate_history: list[bool] = []
+        self.fused_candidate_history: list[bool] = []
         self.combined_strong_history: list[bool] = []
         self.harmonic_partial_history: list[bool] = []
         self.strong_candidate_history: list[bool] = []
         self.ml_window_timestamp_history: list[float] = []
+        self._last_hf_at: Optional[float] = None
+        self._last_acoustic_at: Optional[float] = None
+        self._harmonic_track_started_at: Optional[float] = None
+        self._harmonic_track_last_seen_at: Optional[float] = None
+        self._tracked_f0_hz: Optional[int] = None
+        self._longest_ridge_duration_sec: float = 0.0
         self._alert_below_since: Optional[float] = None
 
     def _profile(self) -> str:
@@ -208,20 +241,15 @@ class StationDetectorState:
         hf_p_drone: Optional[float] = None,
         cnn_p_drone: Optional[float] = None,
         hf_error: bool = False,
+        hf_age_sec: Optional[float] = None,
+        acoustic_bearing_support: bool = False,
     ) -> StationDetectionFrame:
         channels = _as_samples_by_channels(audio)
         mono = channels.mean(axis=1)
         mono_rms = _rms(mono)
         mono_peak = float(np.max(np.abs(mono))) if mono.size else 0.0
 
-        mono_score, mono_f0, _ = harmonic_score(
-            mono,
-            sr,
-            self.config.f0_min,
-            self.config.f0_max,
-            self.config.max_freq,
-            self.config.min_harmonics,
-        )
+        mono_score, mono_f0, raw_mono_f0, track_meta = self._tracked_harmonic_score(mono, sr, timestamp)
         mono_score = float(mono_score)
 
         if self.calibration_started_at is None:
@@ -251,12 +279,22 @@ class StationDetectorState:
         best_f0 = mono_f0 if mono_score >= strongest_score else (strongest.best_f0_hz if strongest else mono_f0)
         agreement_count = sum(1 for item in per_channel if item.passed)
 
-        raw_best_f0 = best_f0
+        raw_best_f0 = raw_mono_f0 if mono_score >= strongest_score else best_f0
         canonical_best_f0 = self._canonical_f0_family(raw_best_f0)
         harmonic_evidence_pct_raw = self._harmonic_evidence_pct(evidence_score)
         ml_drone_pct = hf_p_drone if hf_p_drone is not None else cnn_p_drone
         ml_drone_pct_smoothed = ml_drone_pct
+        if ml_drone_pct is not None:
+            self._last_hf_at = float(timestamp) - float(hf_age_sec or 0.0)
+        effective_hf_age_sec = (
+            None
+            if self._last_hf_at is None
+            else max(0.0, float(timestamp) - float(self._last_hf_at))
+        )
         hf_watch_pass, hf_candidate_pass, hf_strong_pass = self._threshold_passes(ml_drone_pct_smoothed)
+        hf_stale = effective_hf_age_sec is not None and effective_hf_age_sec > float(self.config.max_hf_age_sec)
+        if hf_stale:
+            hf_watch_pass = hf_candidate_pass = hf_strong_pass = False
         ml_strong = hf_strong_pass
         self._record_window_history(
             evidence_score,
@@ -280,6 +318,26 @@ class StationDetectorState:
             harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
         )
         has_suspect_harmonic = harmonic_evidence_pct_raw > 0.0 or evidence_score >= self.suspect_threshold
+        if has_suspect_harmonic or harmonic_evidence_pct_smoothed > 0.0:
+            self._last_acoustic_at = float(timestamp)
+        harmonic_age_sec = (
+            None
+            if self._last_acoustic_at is None
+            else max(0.0, float(timestamp) - float(self._last_acoustic_at))
+        )
+        harmonic_stale = harmonic_age_sec is not None and harmonic_age_sec > float(self.config.max_acoustic_age_sec)
+        if harmonic_stale:
+            harmonic_evidence_pct_smoothed = 0.0
+            combined_drone_evidence_pct = _combined_drone_evidence(ml_drone_pct_smoothed, harmonic_evidence_pct_smoothed)
+        track_state = self._update_harmonic_track(
+            timestamp=timestamp,
+            raw_f0_hz=raw_mono_f0,
+            selected_f0_hz=best_f0,
+            harmonic_evidence_pct=harmonic_evidence_pct_raw,
+            harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
+            details=track_meta.get("details") or [],
+            f0_jump_reason=str(track_meta.get("f0_jump_reason") or ""),
+        )
         self._record_history(canonical_best_f0, harmonic_score_smoothed)
         f0_stable = self._f0_is_stable()
         f0_family_stable = self._f0_family_is_stable()
@@ -288,17 +346,32 @@ class StationDetectorState:
         hf_positive = hf_available and float(hf_p_drone) >= self.config.advisory_threshold
         hf_negative = hf_available and float(hf_p_drone) < self.config.hf_negative_threshold
         ml_unavailable = bool(hf_error) or ml_drone_pct_smoothed is None
-        harmonic_pass = bool(has_suspect_harmonic and harmonic_evidence_pct_smoothed >= self.config.ml_candidate_harmonic_min_pct)
+        acoustic_support = bool(
+            not harmonic_stale
+            and (
+                (has_suspect_harmonic and harmonic_evidence_pct_smoothed >= self.config.ml_candidate_harmonic_min_pct)
+                or bool(acoustic_bearing_support)
+            )
+        )
+        harmonic_pass = acoustic_support
+        self._update_current_candidate_support(
+            acoustic_support=acoustic_support,
+            fused_support=bool(hf_candidate_pass and acoustic_support and combined_drone_evidence_pct > 0.0),
+            strong_support=bool(hf_strong_pass and acoustic_support and combined_drone_evidence_pct >= 0.35),
+        )
         ml_candidate_persistent = self._ml_candidate_persistent()
         strong_local_candidate = self._strong_local_candidate_persistent()
         ml_drone_like_persistent = self._ml_drone_like_persistent(
             f0_family_stable=f0_family_stable,
             harmonic_evidence_pct_smoothed=harmonic_evidence_pct_smoothed,
         )
-        ml_positive_run = self._current_true_run(self.ml_candidate_history)
-        candidate_run = ml_positive_run
+        hf_candidate_run = self._current_true_run(self.ml_candidate_history)
+        acoustic_candidate_run = self._current_true_run(self.acoustic_candidate_history)
+        fused_candidate_run = self._current_true_run(self.fused_candidate_history)
+        ml_positive_run = hf_candidate_run
+        candidate_run = fused_candidate_run
         strong_run = self._current_true_run(self.strong_candidate_history)
-        estimated_detection_delay_sec = self._current_run_elapsed_sec(self.ml_candidate_history)
+        estimated_detection_delay_sec = self._current_run_elapsed_sec(self.fused_candidate_history)
         advisory_support = hf_positive or float(cnn_p_drone or 0.0) >= self.config.advisory_threshold
         meaningful_channel_agreement = channels.shape[1] >= 2 and agreement_count >= 2
         strong_channel_agreement = (
@@ -308,57 +381,70 @@ class StationDetectorState:
         single_channel = channels.shape[1] == 1
         multi_channel = channels.shape[1] > 1
         negative_hf_veto = self.config.hf_negative_caps_status and hf_negative
-        strong_multichannel_evidence = multi_channel and strong_channel_agreement and f0_family_stable
+        strong_multichannel_evidence = multi_channel and strong_channel_agreement and f0_family_stable and acoustic_support
+        fused_alert_evidence = (
+            not ml_unavailable
+            and not hf_stale
+            and not harmonic_stale
+            and hf_strong_pass
+            and acoustic_support
+            and combined_drone_evidence_pct >= self.config.alert_enter_pct
+            and fused_candidate_run >= max(1, int(self.config.min_alert_windows))
+        )
         alert_blocked_reason = ""
 
         if single_channel:
-            alert_ready = (
-                bool(self.config.allow_single_mic_alert)
-                and
-                not ml_unavailable
-                and not negative_hf_veto
-                and ml_drone_pct_smoothed is not None
-                and hf_strong_pass
-                and candidate_run >= max(1, int(self.config.single_mic_strong_run_required))
-                and combined_drone_evidence_pct >= 0.75
-                and (f0_family_stable or f0_stable)
+            alert_ready = bool(self.config.allow_single_mic_alert) and not negative_hf_veto and fused_alert_evidence and (
+                f0_family_stable or f0_stable or track_state["harmonic_track_active"]
             )
             if not bool(self.config.allow_single_mic_alert):
                 alert_blocked_reason = "single_mic_alert_disabled"
             elif ml_unavailable:
                 alert_blocked_reason = "ml_unavailable"
+            elif hf_stale:
+                alert_blocked_reason = "hf_stale"
+            elif harmonic_stale:
+                alert_blocked_reason = "acoustic_stale"
             elif negative_hf_veto:
                 alert_blocked_reason = "hf_negative"
             elif not hf_strong_pass:
                 alert_blocked_reason = "hf_below_strong_threshold"
-            elif candidate_run < max(1, int(self.config.single_mic_strong_run_required)):
-                alert_blocked_reason = "candidate_run_below_required"
-            elif combined_drone_evidence_pct < 0.75:
+            elif not acoustic_support:
+                alert_blocked_reason = "acoustic_below_candidate_support"
+            elif fused_candidate_run < max(1, int(self.config.min_alert_windows)):
+                alert_blocked_reason = "fused_run_below_required"
+            elif combined_drone_evidence_pct < self.config.alert_enter_pct:
                 alert_blocked_reason = "combined_below_alert_threshold"
-            elif not (f0_family_stable or f0_stable):
+            elif not (f0_family_stable or f0_stable or track_state["harmonic_track_active"]):
                 alert_blocked_reason = "f0_not_stable"
             drone_like_ready = not ml_unavailable and not negative_hf_veto and ml_drone_like_persistent
         else:
-            alert_ready = strong_multichannel_evidence or (
-                not ml_unavailable
-                and combined_drone_evidence_pct >= 0.75
-                and candidate_run >= 3
-                and (f0_family_stable or f0_stable)
+            alert_ready = fused_alert_evidence and (
+                strong_multichannel_evidence or f0_family_stable or f0_stable or track_state["harmonic_track_active"]
             )
             drone_like_ready = (
-                (not ml_unavailable and (advisory_support or ml_drone_like_persistent))
-                or strong_multichannel_evidence
+                not ml_unavailable
+                and not hf_stale
+                and not harmonic_stale
+                and acoustic_support
+                and (advisory_support or ml_drone_like_persistent or strong_multichannel_evidence)
             )
             if negative_hf_veto:
-                alert_ready = strong_multichannel_evidence
-                drone_like_ready = strong_multichannel_evidence
+                alert_ready = False
+                drone_like_ready = False
             if not alert_ready:
                 if ml_unavailable and not strong_multichannel_evidence:
                     alert_blocked_reason = "ml_unavailable_without_strong_multichannel"
+                elif hf_stale:
+                    alert_blocked_reason = "hf_stale"
+                elif harmonic_stale:
+                    alert_blocked_reason = "acoustic_stale"
                 elif negative_hf_veto and not strong_multichannel_evidence:
                     alert_blocked_reason = "hf_negative_without_strong_multichannel"
-                elif candidate_run < 3 and not strong_multichannel_evidence:
-                    alert_blocked_reason = "candidate_run_below_required"
+                elif not acoustic_support:
+                    alert_blocked_reason = "acoustic_below_candidate_support"
+                elif fused_candidate_run < max(1, int(self.config.min_alert_windows)):
+                    alert_blocked_reason = "fused_run_below_required"
 
         status, duration = self._status_for_smoothed_evidence(
             timestamp=timestamp,
@@ -382,7 +468,7 @@ class StationDetectorState:
             and status != "alert"
             and (
                 combined_drone_evidence_pct >= 0.60
-                or (ml_strong and decision_harmonic_pct >= 0.40)
+                or (ml_strong and acoustic_support and decision_harmonic_pct >= 0.40)
             )
         ):
             if ml_drone_like_persistent:
@@ -410,7 +496,7 @@ class StationDetectorState:
             harmonic_pass=harmonic_pass,
             single_channel=single_channel,
             ml_strong=ml_strong,
-            ml_candidate_persistent=ml_candidate_persistent,
+            ml_candidate_persistent=fused_candidate_run >= max(1, int(self.config.min_ml_candidate_windows)),
             strong_local_candidate=strong_local_candidate,
             ml_drone_like_persistent=ml_drone_like_persistent,
         )
@@ -446,7 +532,7 @@ class StationDetectorState:
                 status = "suspect" if has_suspect_harmonic or harmonic_pass else "background"
                 if harmonic_pass and strong_local_candidate:
                     operator_label = "strong_local_candidate"
-                elif harmonic_pass and ml_candidate_persistent:
+                elif harmonic_pass and fused_candidate_run >= max(1, int(self.config.single_mic_candidate_run_required)):
                     operator_label = "local_drone_candidate"
                 elif harmonic_pass and hf_candidate_pass:
                     operator_label = "weak_local_candidate"
@@ -463,15 +549,19 @@ class StationDetectorState:
             candidate_block_reason = "hf_below_candidate_threshold"
         elif self._profile() == "field_debug" and not harmonic_pass:
             candidate_block_reason = "harmonic_below_candidate_support"
+        elif hf_candidate_pass and not harmonic_pass:
+            candidate_block_reason = "acoustic_below_candidate_support"
 
         why_candidate_run_reset = ""
         if candidate_run == 0 and not hf_candidate_pass:
             why_candidate_run_reset = candidate_block_reason
+        elif hf_candidate_pass and not harmonic_pass:
+            why_candidate_run_reset = candidate_block_reason or "acoustic_below_candidate_support"
 
         if (
             status == "background"
             and (
-                candidate_run > 0
+                hf_candidate_run > 0
                 or operator_label
                 in {
                     "acoustic_drone_watch",
@@ -497,7 +587,7 @@ class StationDetectorState:
             blocked_reasons.append("single_channel_alert_disabled")
         blocked_by = ",".join(dict.fromkeys(reason for reason in blocked_reasons if reason))
 
-        if operator_label in {"alert", "drone_like", "strong_local_candidate", "local_drone_candidate", "weak_local_candidate", "acoustic_drone_watch", "non_drone_harmonic", "acoustic_harmonic_source"}:
+        if operator_label in {"alert", "drone_like", "strong_local_candidate", "local_drone_candidate", "weak_local_candidate", "acoustic_drone_watch", "ml_drone_candidate", "non_drone_harmonic", "acoustic_harmonic_source"}:
             decision_stage = operator_label
         elif status == "suspect":
             decision_stage = "suspect"
@@ -543,11 +633,27 @@ class StationDetectorState:
             decision_reason=decision_reason,
             operator_label=operator_label,
             candidate_run=candidate_run,
+            hf_candidate_run=hf_candidate_run,
+            acoustic_candidate_run=acoustic_candidate_run,
+            fused_candidate_run=fused_candidate_run,
             ml_positive_run=ml_positive_run,
             strong_run=strong_run,
+            hf_age_sec=effective_hf_age_sec,
+            harmonic_age_sec=harmonic_age_sec,
+            max_hf_age_sec=self.config.max_hf_age_sec,
+            max_acoustic_age_sec=self.config.max_acoustic_age_sec,
             estimated_detection_delay_sec=estimated_detection_delay_sec,
             raw_best_f0_hz=raw_best_f0,
             canonical_best_f0_hz=canonical_best_f0,
+            harmonic_track_active=track_state["harmonic_track_active"],
+            tracked_f0_hz=track_state["tracked_f0_hz"],
+            tracked_ridges=track_state["tracked_ridges"],
+            harmonic_track_age_sec=track_state["harmonic_track_age_sec"],
+            f0_raw_hz=raw_mono_f0,
+            f0_track_hz=track_state["tracked_f0_hz"],
+            f0_jump_reason=track_state["f0_jump_reason"],
+            stable_harmonic_ridge_count=track_state["stable_harmonic_ridge_count"],
+            longest_ridge_duration_sec=track_state["longest_ridge_duration_sec"],
             f0_family_stable=f0_family_stable,
             decision_stage=decision_stage,
             blocked_by=blocked_by,
@@ -563,6 +669,139 @@ class StationDetectorState:
             alert_blocked_reason=alert_blocked_reason,
             why_candidate_run_reset=why_candidate_run_reset,
         )
+
+    def _tracked_harmonic_score(
+        self,
+        mono: np.ndarray,
+        sr: int,
+        timestamp: float,
+    ) -> tuple[float, Optional[int], Optional[int], dict[str, object]]:
+        broad_min = 300 if self.config.harmonic_lock_enabled else self.config.f0_min
+        broad_max = 3500 if self.config.harmonic_lock_enabled else self.config.f0_max
+        raw_score, raw_f0, raw_details = harmonic_score(
+            mono,
+            sr,
+            broad_min,
+            broad_max,
+            self.config.max_freq,
+            self.config.min_harmonics,
+        )
+        if not self.config.harmonic_lock_enabled or self._tracked_f0_hz is None:
+            return float(raw_score), raw_f0, raw_f0, {
+                "details": raw_details,
+                "f0_jump_reason": "unlocked_broad_scan" if self.config.harmonic_lock_enabled else "",
+            }
+
+        bandwidth = float(self.config.harmonic_track_bandwidth_hz)
+        low = max(100, int(round(float(self._tracked_f0_hz) - bandwidth)))
+        high = min(int(3500), int(round(float(self._tracked_f0_hz) + bandwidth)))
+        track_score, track_f0, track_details = harmonic_score(
+            mono,
+            sr,
+            low,
+            high,
+            self.config.max_freq,
+            self.config.min_harmonics,
+        )
+        if track_f0 is not None and raw_f0 is not None:
+            jump_hz = abs(float(raw_f0) - float(self._tracked_f0_hz))
+            raw_same_family = self._same_f0_family(float(raw_f0), float(self._tracked_f0_hz))
+            hold_track = (
+                not raw_same_family
+                and jump_hz > float(self.config.harmonic_ridge_max_drift_hz)
+                and float(track_score) >= float(raw_score) * float(self.config.harmonic_f0_jump_penalty)
+            )
+            if hold_track:
+                return float(track_score), track_f0, raw_f0, {
+                    "details": track_details,
+                    "f0_jump_reason": f"held_track_penalized_raw_jump_{jump_hz:.0f}hz",
+                }
+        if track_f0 is not None and raw_f0 is None:
+            return float(track_score), track_f0, None, {
+                "details": track_details,
+                "f0_jump_reason": "held_track_missing_raw_f0",
+            }
+        return float(raw_score), raw_f0, raw_f0, {
+            "details": raw_details,
+            "f0_jump_reason": "",
+        }
+
+    def _update_harmonic_track(
+        self,
+        *,
+        timestamp: float,
+        raw_f0_hz: Optional[int],
+        selected_f0_hz: Optional[int],
+        harmonic_evidence_pct: float,
+        harmonic_evidence_pct_smoothed: float,
+        details: list[float],
+        f0_jump_reason: str,
+    ) -> dict[str, object]:
+        if not self.config.harmonic_lock_enabled:
+            return self._harmonic_track_state(False, raw_f0_hz, selected_f0_hz, [], 0.0, f0_jump_reason)
+
+        has_ridge = selected_f0_hz is not None and (
+            float(harmonic_evidence_pct) > 0.0 or float(harmonic_evidence_pct_smoothed) > 0.0
+        )
+        if has_ridge:
+            if self._tracked_f0_hz is None or not self._same_f0_family(float(selected_f0_hz), float(self._tracked_f0_hz)):
+                self._tracked_f0_hz = int(selected_f0_hz)
+                self._harmonic_track_started_at = float(timestamp)
+            elif abs(float(selected_f0_hz) - float(self._tracked_f0_hz)) <= float(self.config.harmonic_ridge_max_drift_hz):
+                self._tracked_f0_hz = int(round(0.75 * float(self._tracked_f0_hz) + 0.25 * float(selected_f0_hz)))
+            self._harmonic_track_last_seen_at = float(timestamp)
+        elif (
+            self._harmonic_track_last_seen_at is not None
+            and float(timestamp) - float(self._harmonic_track_last_seen_at) > float(self.config.harmonic_lock_hold_sec)
+        ):
+            self._tracked_f0_hz = None
+            self._harmonic_track_started_at = None
+            self._harmonic_track_last_seen_at = None
+
+        age = 0.0
+        if self._harmonic_track_started_at is not None and self._harmonic_track_last_seen_at is not None:
+            age = max(0.0, float(timestamp) - float(self._harmonic_track_started_at))
+        active = bool(
+            self._tracked_f0_hz is not None
+            and self._harmonic_track_last_seen_at is not None
+            and float(timestamp) - float(self._harmonic_track_last_seen_at) <= float(self.config.harmonic_lock_hold_sec)
+            and age >= float(self.config.harmonic_lock_min_duration_sec)
+        )
+        if active:
+            self._longest_ridge_duration_sec = max(self._longest_ridge_duration_sec, age)
+        ridges = self._tracked_ridges(self._tracked_f0_hz, details)
+        return self._harmonic_track_state(active, raw_f0_hz, self._tracked_f0_hz, ridges, age, f0_jump_reason)
+
+    def _tracked_ridges(self, f0_hz: Optional[int], details: list[float]) -> list[dict[str, float | int]]:
+        if f0_hz is None:
+            return []
+        count = max(0, len(details))
+        return [
+            {"k": k, "freq_hz": float(k * float(f0_hz))}
+            for k in range(1, count + 1)
+            if k * float(f0_hz) <= float(self.config.max_freq)
+        ]
+
+    def _harmonic_track_state(
+        self,
+        active: bool,
+        raw_f0_hz: Optional[int],
+        tracked_f0_hz: Optional[int],
+        ridges: list[dict[str, float | int]],
+        age_sec: float,
+        jump_reason: str,
+    ) -> dict[str, object]:
+        return {
+            "harmonic_track_active": bool(active),
+            "tracked_f0_hz": tracked_f0_hz,
+            "tracked_ridges": ridges,
+            "harmonic_track_age_sec": float(max(0.0, age_sec)),
+            "f0_raw_hz": raw_f0_hz,
+            "f0_track_hz": tracked_f0_hz,
+            "f0_jump_reason": str(jump_reason or ""),
+            "stable_harmonic_ridge_count": len(ridges) if active else 0,
+            "longest_ridge_duration_sec": float(self._longest_ridge_duration_sec),
+        }
 
     def _finish_calibration(self) -> None:
         scores = np.asarray(self.background_scores, dtype=np.float64)
@@ -755,6 +994,8 @@ class StationDetectorState:
         self.ml_watch_history.append(bool(ml_watch))
         self.ml_candidate_history.append(bool(ml_candidate))
         self.ml_strong_history.append(bool(ml_strong))
+        self.acoustic_candidate_history.append(False)
+        self.fused_candidate_history.append(False)
         self.combined_strong_history.append(False)
         self.harmonic_partial_history.append(False)
         self.strong_candidate_history.append(False)
@@ -767,6 +1008,8 @@ class StationDetectorState:
         self._trim_history(self.ml_watch_history)
         self._trim_history(self.ml_candidate_history)
         self._trim_history(self.ml_strong_history)
+        self._trim_history(self.acoustic_candidate_history)
+        self._trim_history(self.fused_candidate_history)
         self._trim_history(self.combined_strong_history)
         self._trim_history(self.harmonic_partial_history)
         self._trim_history(self.strong_candidate_history)
@@ -777,12 +1020,20 @@ class StationDetectorState:
             self.combined_strong_history[-1] = float(combined_drone_evidence_pct) >= 0.35
         if self.harmonic_partial_history:
             self.harmonic_partial_history[-1] = float(harmonic_evidence_pct_smoothed) >= 0.25
-        if self.strong_candidate_history and self.ml_strong_history:
-            has_support = (
-                float(combined_drone_evidence_pct) >= 0.35
-                or float(harmonic_evidence_pct_smoothed) >= 0.25
-            )
-            self.strong_candidate_history[-1] = bool(self.ml_strong_history[-1] and has_support)
+
+    def _update_current_candidate_support(
+        self,
+        *,
+        acoustic_support: bool,
+        fused_support: bool,
+        strong_support: bool,
+    ) -> None:
+        if self.acoustic_candidate_history:
+            self.acoustic_candidate_history[-1] = bool(acoustic_support)
+        if self.fused_candidate_history:
+            self.fused_candidate_history[-1] = bool(fused_support)
+        if self.strong_candidate_history:
+            self.strong_candidate_history[-1] = bool(strong_support)
 
     def _ml_candidate_persistent(self) -> bool:
         required = max(1, int(self.config.single_mic_candidate_run_required if self._profile() == "field_debug" else self.config.min_ml_candidate_windows))
@@ -1130,8 +1381,15 @@ class StationDetectorState:
         decision_reason: str = "no acoustic evidence",
         operator_label: str = "background",
         candidate_run: int = 0,
+        hf_candidate_run: int = 0,
+        acoustic_candidate_run: int = 0,
+        fused_candidate_run: int = 0,
         ml_positive_run: int = 0,
         strong_run: int = 0,
+        hf_age_sec: Optional[float] = None,
+        harmonic_age_sec: Optional[float] = None,
+        max_hf_age_sec: float = 6.0,
+        max_acoustic_age_sec: float = 6.0,
         estimated_detection_delay_sec: Optional[float] = None,
         raw_best_f0_hz: Optional[int] = None,
         canonical_best_f0_hz: Optional[int] = None,
@@ -1149,6 +1407,15 @@ class StationDetectorState:
         alert_block_reason: str = "",
         alert_blocked_reason: str = "",
         why_candidate_run_reset: str = "",
+        harmonic_track_active: bool = False,
+        tracked_f0_hz: Optional[int] = None,
+        tracked_ridges: Optional[list[dict[str, float | int]]] = None,
+        harmonic_track_age_sec: float = 0.0,
+        f0_raw_hz: Optional[int] = None,
+        f0_track_hz: Optional[int] = None,
+        f0_jump_reason: str = "",
+        stable_harmonic_ridge_count: int = 0,
+        longest_ridge_duration_sec: float = 0.0,
     ) -> StationDetectionFrame:
         harmonic_pct = float(np.clip(harmonic_evidence_pct, 0.0, 1.0))
         raw_pct = float(np.clip(harmonic_evidence_pct_raw, 0.0, 1.0))
@@ -1185,8 +1452,15 @@ class StationDetectorState:
             decision_reason=str(decision_reason),
             operator_label=str(operator_label),
             candidate_run=int(candidate_run),
+            hf_candidate_run=int(hf_candidate_run),
+            acoustic_candidate_run=int(acoustic_candidate_run),
+            fused_candidate_run=int(fused_candidate_run),
             ml_positive_run=int(ml_positive_run),
             strong_run=int(strong_run),
+            hf_age_sec=None if hf_age_sec is None else float(max(0.0, hf_age_sec)),
+            harmonic_age_sec=None if harmonic_age_sec is None else float(max(0.0, harmonic_age_sec)),
+            max_hf_age_sec=float(max_hf_age_sec),
+            max_acoustic_age_sec=float(max_acoustic_age_sec),
             estimated_detection_delay_sec=None
             if estimated_detection_delay_sec is None
             else float(max(0.0, estimated_detection_delay_sec)),
@@ -1206,4 +1480,13 @@ class StationDetectorState:
             alert_block_reason=str(alert_block_reason),
             alert_blocked_reason=str(alert_blocked_reason),
             why_candidate_run_reset=str(why_candidate_run_reset),
+            harmonic_track_active=bool(harmonic_track_active),
+            tracked_f0_hz=tracked_f0_hz,
+            tracked_ridges=list(tracked_ridges or []),
+            harmonic_track_age_sec=float(max(0.0, harmonic_track_age_sec)),
+            f0_raw_hz=f0_raw_hz,
+            f0_track_hz=f0_track_hz,
+            f0_jump_reason=str(f0_jump_reason),
+            stable_harmonic_ridge_count=int(stable_harmonic_ridge_count),
+            longest_ridge_duration_sec=float(max(0.0, longest_ridge_duration_sec)),
         )

@@ -79,6 +79,11 @@ skyear-run-benchmarks = "tools.run_dataset_benchmarks:main"
 skyear-combine-benchmarks = "tools.combine_benchmark_summaries:main"
 skyear-check-array-channels = "tools.check_array_channels:main"
 skyear-calibrate-array = "tools.calibrate_array:main"
+skyear-recording-start = "tools.recording_control:start_main"
+skyear-recording-stop = "tools.recording_control:stop_main"
+skyear-recording-mark = "tools.recording_control:mark_main"
+skyear-build-recording-manifest = "tools.build_recording_manifest:main"
+skyear-eval-recording-session = "tools.eval_recording_session:main"
 
 [tool.setuptools.packages.find]
 include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*", "data*"]

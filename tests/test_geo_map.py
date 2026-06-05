@@ -30,6 +30,12 @@ def _candidate_event(
     lon: float | None,
     bearing: float | None,
     now: float = 1000.0,
+    *,
+    raw_bearing: float | None = None,
+    tracked_bearing: float | None = None,
+    bearing_reliable: bool | None = None,
+    bearing_quality: str | None = None,
+    bearing_used_for_geo: bool | None = None,
 ) -> AcousticEvent:
     location = None if lat is None or lon is None else GeoPoint(latitude=lat, longitude=lon, altitude_m=0.0)
     return AcousticEvent(
@@ -48,7 +54,12 @@ def _candidate_event(
         operator_label="ml_drone_candidate",
         candidate_run=2,
         estimated_azimuth_deg=bearing,
+        raw_bearing_deg=raw_bearing,
+        tracked_bearing_deg=tracked_bearing,
         bearing_uncertainty_deg=20.0,
+        bearing_reliable=bearing_reliable,
+        bearing_quality=bearing_quality,
+        bearing_used_for_geo=bearing_used_for_geo,
         beam_confidence_pct=0.7,
         calibrated=True,
         metadata={"server_received_unix": now, "operator_label": "ml_drone_candidate"},
@@ -106,6 +117,24 @@ def test_no_station_location_returns_no_geo_estimate():
     assert estimate["estimate_type"] == "none"
 
 
+def test_unreliable_bearing_is_not_used_for_geo_estimates():
+    event = _candidate_event(
+        "a",
+        32.0,
+        34.0,
+        None,
+        raw_bearing=240.0,
+        tracked_bearing=60.0,
+        bearing_reliable=False,
+        bearing_quality="unreliable",
+        bearing_used_for_geo=False,
+    )
+
+    estimate = estimate_from_recent_bearings([event], max_age_sec=10.0, now=1001.0)
+
+    assert estimate["estimate_type"] == "none"
+
+
 def test_map_state_includes_stations_and_estimates():
     now = time.time()
     target = {"latitude": 32.0, "longitude": 34.0}
@@ -120,6 +149,58 @@ def test_map_state_includes_stations_and_estimates():
     assert len(state["bearing_cues"]) >= 2
     assert state["geo_estimates"]
     assert state["geo_estimates"][0]["estimate_type"] in {"bearing_intersection", "multi_station_area"}
+
+
+def test_map_state_exposes_raw_and_tracked_bearings_separately():
+    now = time.time()
+    db.add_event(
+        _candidate_event(
+            "tracked",
+            32.0,
+            34.0,
+            82.0,
+            now=now,
+            raw_bearing=100.0,
+            tracked_bearing=82.0,
+            bearing_reliable=True,
+            bearing_quality="good",
+            bearing_used_for_geo=True,
+        )
+    )
+
+    state = map_state_from_db(db, now=now + 1.0)
+    station = state["stations"][0]
+
+    assert station["raw_bearing_deg"] == 100.0
+    assert station["tracked_bearing_deg"] == 82.0
+    assert station["bearing_deg"] == 82.0
+
+
+def test_map_state_does_not_expose_precise_bearing_when_unreliable():
+    now = time.time()
+    db.add_event(
+        _candidate_event(
+            "unreliable",
+            32.0,
+            34.0,
+            None,
+            now=now,
+            raw_bearing=240.0,
+            tracked_bearing=60.0,
+            bearing_reliable=False,
+            bearing_quality="unreliable",
+            bearing_used_for_geo=False,
+        )
+    )
+
+    state = map_state_from_db(db, now=now + 1.0)
+    station = state["stations"][0]
+
+    assert station["bearing_deg"] is None
+    assert station["raw_bearing_deg"] == 240.0
+    assert station["tracked_bearing_deg"] == 60.0
+    assert state["bearing_cues"] == []
+    assert state["geo_estimates"] == []
 
 
 def test_map_state_uses_recent_event_health_fallback_without_heartbeat():

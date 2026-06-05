@@ -67,7 +67,7 @@ def run_manifest(args: argparse.Namespace) -> list:
     hf_detector = HFDetector(model_id=args.model_id) if args.hf else None
     events = []
     for row in rows:
-        path = Path(row.get("audio_path") or row.get("file_path") or "")
+        path = Path(row.get("audio_path") or row.get("file_path") or row.get("wav_path") or "")
         if not path.exists():
             print(f"[WARN] missing audio: {path}")
             continue
@@ -88,7 +88,7 @@ def run_manifest(args: argparse.Namespace) -> list:
                 station_id=station_args.station_id,
                 root=path.parent,
                 file_path=path,
-                label=str(row.get("label") or "unknown"),
+                label=str(row.get("label") or row.get("label_from_markers") or "unknown"),
                 distance_category=row.get("distance_category"),
                 audio=audio,
                 sample_rate=station_args.sample_rate,

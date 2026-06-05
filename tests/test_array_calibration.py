@@ -12,6 +12,8 @@ from station.array_calibration import (
     detect_strongest_channel,
     estimate_delay_correction_samples,
     estimate_gain_correction,
+    load_calibration,
+    validate_calibration_payload,
     verify_channel_order,
 )
 from station.direction import fractional_delay
@@ -47,8 +49,9 @@ def test_gain_mismatch_corrected():
             "gain_correction": gains,
             "delay_correction_samples": [0.0, 0.0, 0.0],
             "bad_channels": [],
-            "channel_rms": [0.0, 0.0, 0.0],
+            "channel_rms": [0.1, 0.05, 0.2],
             "channel_health": ["ok", "ok", "ok"],
+            "calibration_valid": True,
         },
     )
 
@@ -73,8 +76,9 @@ def test_delay_mismatch_corrected():
             "gain_correction": [1.0, 1.0],
             "delay_correction_samples": corrections,
             "bad_channels": [],
-            "channel_rms": [0.0, 0.0],
+            "channel_rms": [1.0, 1.0],
             "channel_health": ["ok", "ok"],
+            "calibration_valid": True,
         },
     )
 
@@ -96,8 +100,9 @@ def test_dropped_channel_excluded():
             "gain_correction": [1.0, 1.0, 1.0, 1.0],
             "delay_correction_samples": [0.0, 0.0, 0.0, 0.0],
             "bad_channels": [2],
-            "channel_rms": [1.0, 1.0, 0.0, 1.0],
-            "channel_health": ["ok", "ok", "dead", "ok"],
+            "channel_rms": [1.0, 1.0, 1.0, 1.0],
+            "channel_health": ["ok", "ok", "bad", "ok"],
+            "calibration_valid": True,
         },
     )
 
@@ -115,7 +120,47 @@ def test_build_calibration_marks_dropout_channel():
     calibration = build_calibration(audio, sample_rate=48000, estimate_delay=False)
 
     assert 3 in calibration["bad_channels"]
-    assert calibration["channel_health"][3] in {"dead", "dropout"}
+    assert calibration["channel_health"][3] == "silent"
+    assert calibration["calibration_valid"] is False
+
+
+def test_zero_rms_calibration_is_invalid():
+    payload = {
+        "channel_count": 8,
+        "channel_rms": [0.0] * 8,
+        "channel_health": ["ok"] * 8,
+        "bad_channels": [],
+    }
+
+    validation = validate_calibration_payload(payload)
+
+    assert validation["calibration_valid"] is False
+    assert validation["silent_channels"] == list(range(8))
+
+
+def test_zero_rms_channels_are_not_ok(tmp_path: Path):
+    path = tmp_path / "placeholder.json"
+    path.write_text(
+        json.dumps(
+            {
+                "channel_count": 2,
+                "input_channel_order": [0, 1],
+                "gain_correction": [1.0, 1.0],
+                "delay_correction_samples": [0.0, 0.0],
+                "bad_channels": [],
+                "channel_rms": [0.0, 0.0],
+                "channel_health": ["ok", "ok"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calibration = load_calibration(path)
+
+    assert calibration is not None
+    assert calibration.calibration_valid is False
+    assert calibration.calibration_type == "placeholder"
+    assert calibration.channel_health == ["silent", "silent"]
 
 
 def test_8ch_without_calibration_warns(capsys):
@@ -136,8 +181,9 @@ def test_load_array_calibration_from_file(tmp_path: Path, capsys):
                 "gain_correction": [1.0, 1.0],
                 "delay_correction_samples": [0.0, 0.0],
                 "bad_channels": [],
-                "channel_rms": [0.0, 0.0],
+                "channel_rms": [0.1, 0.1],
                 "channel_health": ["ok", "ok"],
+                "calibration_valid": True,
             }
         ),
         encoding="utf-8",
@@ -151,3 +197,34 @@ def test_load_array_calibration_from_file(tmp_path: Path, capsys):
     assert calibration is not None
     assert calibration.input_channel_order == [1, 0]
     assert "Array calibration loaded" in capsys.readouterr().out
+
+
+def test_8ch_placeholder_calibration_warns_invalid(tmp_path: Path, capsys):
+    path = tmp_path / "placeholder.json"
+    path.write_text(
+        json.dumps(
+            {
+                "calibration_type": "placeholder",
+                "calibration_valid": False,
+                "channel_count": 8,
+                "input_channel_order": list(range(8)),
+                "gain_correction": [1.0] * 8,
+                "delay_correction_samples": [0.0] * 8,
+                "bad_channels": [],
+                "channel_rms": [0.0] * 8,
+                "channel_health": ["ok"] * 8,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calibration = station_agent.load_array_calibration_for_station(
+        {"calibration_file": str(path)},
+        {"channels": 8},
+    )
+
+    output = capsys.readouterr().out
+    assert calibration is not None
+    assert calibration.calibration_valid is False
+    assert "array calibration is placeholder/invalid" in output
+    assert "Array uncalibrated; bearing may be unreliable" in output

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import time
 from fastapi import Depends, FastAPI
+from pydantic import BaseModel
 from shared.event_schema import AcousticEvent, FusedAlert, StationHeartbeat
 from server.auth import require_station_auth
 from server.database import db
@@ -9,6 +10,15 @@ from server.geo_fusion import map_state_from_db
 from server.ptz_dispatcher import dispatch_ptz_for_alert
 
 app = FastAPI(title="Drone Acoustic Network API")
+
+
+class RecordingCommandBody(BaseModel):
+    session_name: str | None = None
+    label: str | None = None
+    note: str | None = None
+    distance_m: float | None = None
+    bearing_deg: float | None = None
+    drone_model: str | None = None
 
 @app.get("/health")
 def health():
@@ -44,7 +54,8 @@ def ingest_event(event: AcousticEvent, _: None = Depends(require_station_auth)):
 def ingest_heartbeat(heartbeat: StationHeartbeat, _: None = Depends(require_station_auth)):
     _stamp_receive(heartbeat)
     db.add_heartbeat(heartbeat)
-    return {"ok": True, "server_received_unix": heartbeat.server_received_unix}
+    command = db.pop_recording_command(heartbeat.station_id)
+    return {"ok": True, "server_received_unix": heartbeat.server_received_unix, "recording_command": command}
 
 @app.get("/stations/heartbeat")
 def get_latest_heartbeats():
@@ -56,6 +67,40 @@ def get_latest_heartbeats():
 @app.get("/stations/health")
 def get_station_health():
     return db.station_health()
+
+
+@app.post("/stations/{station_id}/recording/start")
+def recording_start(station_id: str, body: RecordingCommandBody | None = None):
+    payload = (body or RecordingCommandBody()).model_dump(exclude_none=True)
+    command = db.queue_recording_command(station_id, "start", payload)
+    return {"ok": True, "command": command}
+
+
+@app.post("/stations/{station_id}/recording/stop")
+def recording_stop(station_id: str, body: RecordingCommandBody | None = None):
+    payload = (body or RecordingCommandBody()).model_dump(exclude_none=True)
+    command = db.queue_recording_command(station_id, "stop", payload)
+    return {"ok": True, "command": command}
+
+
+@app.post("/stations/{station_id}/recording/mark")
+def recording_mark(station_id: str, body: RecordingCommandBody | None = None):
+    payload = (body or RecordingCommandBody()).model_dump(exclude_none=True)
+    command = db.queue_recording_command(station_id, "mark", payload)
+    return {"ok": True, "command": command}
+
+
+@app.get("/stations/{station_id}/recording/state")
+def recording_state(station_id: str):
+    heartbeat = db.latest_heartbeats_by_station().get(station_id)
+    metadata = (heartbeat.metadata if heartbeat else {}) or {}
+    return {
+        "ok": True,
+        "station_id": station_id,
+        "state": metadata.get("recording_state") or {},
+        "last_command_result": metadata.get("recording_command_result"),
+        "pending_commands": db.pending_recording_commands(station_id),
+    }
 
 @app.get("/events")
 def get_events(limit: int = 100):

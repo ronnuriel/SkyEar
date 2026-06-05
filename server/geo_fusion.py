@@ -20,8 +20,13 @@ def bearing_cues_from_events(events: list[Any], max_age_sec: float = 10.0, now: 
             {
                 "station_id": item["station_id"],
                 "bearing_deg": item["bearing_deg"],
+                "raw_bearing_deg": item.get("raw_bearing_deg"),
+                "tracked_bearing_deg": item.get("tracked_bearing_deg"),
                 "uncertainty_deg": item["uncertainty_deg"],
                 "beam_confidence_pct": item.get("beam_confidence_pct"),
+                "bearing_quality": item.get("bearing_quality"),
+                "bearing_reject_reason": item.get("bearing_reject_reason"),
+                "bearing_used_for_geo": item.get("bearing_used_for_geo"),
                 "sector_polygon": bearing_sector_polygon(
                     item["latitude"],
                     item["longitude"],
@@ -54,7 +59,18 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
             longitude = (heartbeat.get("metadata") or {}).get("longitude")
         bearing = None
         if event is not None:
-            bearing = event.estimated_azimuth_deg if event.estimated_azimuth_deg is not None else event_meta.get("bearing_deg")
+            used_for_geo = event.bearing_used_for_geo
+            if used_for_geo is None:
+                used_for_geo = event_meta.get("bearing_used_for_geo")
+            if used_for_geo is not False:
+                if event.tracked_bearing_deg is not None:
+                    bearing = event.tracked_bearing_deg
+                elif event.estimated_azimuth_deg is not None:
+                    bearing = event.estimated_azimuth_deg
+                elif event_meta.get("tracked_bearing_deg") is not None:
+                    bearing = event_meta.get("tracked_bearing_deg")
+                else:
+                    bearing = event_meta.get("bearing_deg")
         health_label, health_source, last_seen_sec_ago = _map_health(item)
         stations.append(
             {
@@ -73,6 +89,11 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
                 "combined_drone_evidence_pct": event.combined_drone_evidence_pct if event else None,
                 "candidate_run": event.candidate_run if event else None,
                 "bearing_deg": bearing,
+                "raw_bearing_deg": event.raw_bearing_deg if event else None,
+                "tracked_bearing_deg": event.tracked_bearing_deg if event else None,
+                "bearing_track_status": event.bearing_track_status if event else None,
+                "bearing_flip_suppressed": event.bearing_flip_suppressed if event else None,
+                "bearing_used_for_geo": event.bearing_used_for_geo if event else None,
                 "bearing_uncertainty_deg": event.bearing_uncertainty_deg if event else None,
                 "beam_confidence_pct": event.beam_confidence_pct if event else None,
                 "second_peak_bearing_deg": event.second_peak_bearing_deg if event else None,

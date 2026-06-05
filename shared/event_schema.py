@@ -55,8 +55,15 @@ class AcousticEvent(BaseModel):
     decision_reason: Optional[str] = None
     operator_label: Optional[str] = None
     candidate_run: Optional[int] = Field(default=None, ge=0)
+    hf_candidate_run: Optional[int] = Field(default=None, ge=0)
+    acoustic_candidate_run: Optional[int] = Field(default=None, ge=0)
+    fused_candidate_run: Optional[int] = Field(default=None, ge=0)
     ml_positive_run: Optional[int] = Field(default=None, ge=0)
     strong_run: Optional[int] = Field(default=None, ge=0)
+    hf_age_sec: Optional[float] = Field(default=None, ge=0.0)
+    harmonic_age_sec: Optional[float] = Field(default=None, ge=0.0)
+    max_hf_age_sec: Optional[float] = Field(default=None, ge=0.0)
+    max_acoustic_age_sec: Optional[float] = Field(default=None, ge=0.0)
     estimated_detection_delay_sec: Optional[float] = Field(default=None, ge=0.0)
     decision_stage: Optional[str] = None
     blocked_by: Optional[str] = None
@@ -71,7 +78,24 @@ class AcousticEvent(BaseModel):
     alert_block_reason: Optional[str] = None
     alert_blocked_reason: Optional[str] = None
     why_candidate_run_reset: Optional[str] = None
+    harmonic_track_active: Optional[bool] = None
+    tracked_f0_hz: Optional[int] = None
+    tracked_ridges: list[Dict[str, Any]] = Field(default_factory=list)
+    harmonic_track_age_sec: Optional[float] = Field(default=None, ge=0.0)
+    f0_raw_hz: Optional[int] = None
+    f0_track_hz: Optional[int] = None
+    f0_jump_reason: Optional[str] = None
+    stable_harmonic_ridge_count: Optional[int] = Field(default=None, ge=0)
+    longest_ridge_duration_sec: Optional[float] = Field(default=None, ge=0.0)
     estimated_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    raw_bearing_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    tracked_bearing_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    bearing_velocity_deg_per_sec: Optional[float] = None
+    bearing_track_age_sec: Optional[float] = Field(default=None, ge=0.0)
+    bearing_track_stable: Optional[bool] = None
+    bearing_track_status: Optional[str] = None
+    bearing_flip_suppressed: Optional[bool] = None
+    bearing_used_for_geo: Optional[bool] = None
     direction_confidence: Optional[float] = None
     beamforming_method: Optional[str] = None
     beam_score: Optional[float] = None

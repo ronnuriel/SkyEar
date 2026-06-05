@@ -1,15 +1,17 @@
 {
   "bad_channels": [],
+  "calibration_type": "placeholder",
+  "calibration_valid": false,
   "channel_count": 8,
   "channel_health": [
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "ok"
+    "silent",
+    "silent",
+    "silent",
+    "silent",
+    "silent",
+    "silent",
+    "silent",
+    "silent"
   ],
   "channel_permutation": [
     0,

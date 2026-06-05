@@ -130,3 +130,29 @@ def test_bearing_ray_rows_include_endpoint():
 
     assert rows[0]["station_id"] == "s1"
     assert rows[0]["ray_end_lon"] > rows[0]["lon"]
+
+
+def test_bearing_ray_rows_use_tracked_bearing_and_skip_unreliable():
+    rows = bearing_ray_rows(
+        [
+            {
+                "station_id": "tracked",
+                "estimated_azimuth_deg": 240.0,
+                "raw_bearing_deg": 240.0,
+                "tracked_bearing_deg": 60.0,
+                "bearing_used_for_geo": True,
+                "station_location": {"latitude": 32.0, "longitude": 34.0},
+            },
+            {
+                "station_id": "unreliable",
+                "raw_bearing_deg": 120.0,
+                "tracked_bearing_deg": 60.0,
+                "bearing_used_for_geo": False,
+                "station_location": {"latitude": 32.0, "longitude": 34.0},
+            },
+        ],
+        ray_length_m=100.0,
+    )
+
+    assert [row["station_id"] for row in rows] == ["tracked"]
+    assert rows[0]["bearing_deg"] == 60.0

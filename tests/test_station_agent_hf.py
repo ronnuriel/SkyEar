@@ -101,6 +101,27 @@ def test_startup_connectivity_check_can_be_disabled():
     assert "disabled" in reason
 
 
+def test_audio_highpass_filter_can_be_configured():
+    highpass = station_agent._build_audio_highpass_filter(
+        {"sample_rate": 48000, "channels": 2, "highpass_hz": 300, "highpass_order": 2}
+    )
+
+    assert highpass is not None
+    assert highpass.cutoff_hz == 300
+    assert highpass.channels == 2
+    assert highpass.order == 2
+
+
+def test_audio_highpass_filter_is_optional():
+    assert station_agent._build_audio_highpass_filter({"sample_rate": 48000, "channels": 2}) is None
+
+
+def test_heading_offset_is_applied_once_with_wraparound():
+    assert station_agent._apply_heading_offset(350.0, 20.0) == 10.0
+    assert station_agent._apply_heading_offset(90.0, 0.0) == 90.0
+    assert station_agent._apply_heading_offset(None, 20.0) is None
+
+
 def test_mic_array_profile_fills_field_positions():
     cfg = {
         "audio": {"channels": 8},
@@ -124,6 +145,16 @@ def test_mono_mic_array_profiles_are_known_without_positions():
         assert resolved["mic_array"]["profile"] == profile_name
         assert resolved["mic_array"]["sync_mode"] == "mono"
         assert "mic_positions_m" not in resolved["mic_array"]
+
+
+def test_volt2_dual_mic_profile_is_unsynchronized_without_positions():
+    resolved = station_agent.apply_mic_array_profile_defaults(
+        {"audio": {"channels": 2}, "mic_array": {"profile": "volt2_dual_mic"}}
+    )
+
+    assert resolved["mic_array"]["profile"] == "volt2_dual_mic"
+    assert resolved["mic_array"]["sync_mode"] == "unsynchronized"
+    assert "mic_positions_m" not in resolved["mic_array"]
 
 
 def test_explicit_mic_positions_win_over_profile():
