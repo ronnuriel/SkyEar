@@ -22,6 +22,19 @@ class ChannelEvidence(BaseModel):
     best_f0_hz: Optional[int] = None
     passed: bool
 
+class AcousticDetectionCandidate(BaseModel):
+    candidate_id: str | int
+    source_hint_id: Optional[str] = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    drone_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bearing_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    bearing_error_deg: Optional[float] = Field(default=None, ge=0.0)
+    bearing_quality: Optional[str] = None
+    f0_hz: Optional[int] = None
+    harmonic_score: Optional[float] = None
+    power: Optional[float] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
 class AcousticEvent(BaseModel):
     station_id: str
     station_name: Optional[str] = None
@@ -141,6 +154,7 @@ class AcousticEvent(BaseModel):
     channel_evidence: list[ChannelEvidence] = Field(default_factory=list)
     detector_version: Optional[str] = None
     station_mode: Optional[str] = None
+    detections: list[AcousticDetectionCandidate] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class StationHeartbeat(BaseModel):
@@ -163,10 +177,29 @@ class StationHeartbeat(BaseModel):
     errors: list[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+class TrackObservation(BaseModel):
+    station_id: str
+    station_name: Optional[str] = None
+    event_timestamp_unix: float
+    server_received_unix: Optional[float] = None
+    candidate_id: Optional[str | int] = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    drone_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bearing_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    bearing_error_deg: Optional[float] = Field(default=None, ge=0.0)
+    f0_hz: Optional[int] = None
+    harmonic_score: Optional[float] = None
+    source_hint_id: Optional[str] = None
+    original_event: Optional[AcousticEvent] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
 class TrackSummary(BaseModel):
     track_id: str
     station_ids: list[str] = Field(default_factory=list)
     events: list[AcousticEvent] = Field(default_factory=list)
+    observations: list[TrackObservation] = Field(default_factory=list)
+    target_count_hint: Optional[int] = None
+    ambiguity: Optional[str] = None
     level: int = Field(ge=0, le=3)
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str

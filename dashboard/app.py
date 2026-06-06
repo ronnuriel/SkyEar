@@ -206,6 +206,40 @@ def _draw_track_card(track: dict):
         cols[0].metric("Stations", ", ".join(track.get("station_ids") or []))
         cols[1].metric("Confidence", f"{float(track.get('confidence') or 0.0):.2f}")
         cols[2].metric("Same f0", "yes" if track.get("same_f0") else "no")
+        observations = track.get("observations") or []
+        source_ids = track.get("source_ids") or sorted(
+            {
+                str(observation.get("source_hint_id") or (observation.get("metadata") or {}).get("simulated_source_id"))
+                for observation in observations
+                if observation.get("source_hint_id") is not None
+                or (observation.get("metadata") or {}).get("simulated_source_id") is not None
+            }
+        )
+        eta_values = [
+            float((observation.get("metadata") or {})["target_eta_sec"])
+            for observation in observations
+            if (observation.get("metadata") or {}).get("target_eta_sec") is not None
+        ]
+        line_values = [
+            str((observation.get("metadata") or {}).get("latest_line_crossed"))
+            for observation in observations
+            if (observation.get("metadata") or {}).get("latest_line_crossed") is not None
+        ]
+        eta_sec = track.get("target_eta_sec")
+        if eta_sec is None and eta_values:
+            eta_sec = min(eta_values)
+        latest_line = track.get("latest_line_crossed") or (line_values[-1] if line_values else None)
+        if source_ids or eta_sec is not None or latest_line:
+            extra = []
+            if source_ids:
+                extra.append(f"sources={','.join(source_ids)}")
+            if latest_line:
+                extra.append(f"line={latest_line}")
+            if eta_sec is not None:
+                extra.append(f"ETA={float(eta_sec):.1f}s")
+            st.caption(" | ".join(extra))
+        if track.get("ambiguity"):
+            st.caption(track.get("ambiguity"))
         estimated_source = track.get("estimated_source") or {}
         if estimated_source:
             st.caption(

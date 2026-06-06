@@ -3,8 +3,10 @@ from __future__ import annotations
 import time
 
 from server.track_fusion import cluster_events_into_tracks, fuse_tracks
-from shared.event_schema import AcousticEvent, GeoPoint
+from server.track_observations import observations_from_events
+from shared.event_schema import AcousticDetectionCandidate, AcousticEvent, GeoPoint
 from tools.simulate_two_near_one_far import build_events
+from tools.simulate_multi_target import build_events as build_multi_target_events
 
 
 def _event(
@@ -141,3 +143,129 @@ def test_two_near_one_far_fusion_does_not_add_far_station_to_near_track():
     assert near_track.station_ids == ["sim_001", "sim_002"]
     assert "sim_003" not in near_track.station_ids
     assert "sim_003" not in near_track.reason
+
+
+def test_event_with_no_detections_expands_to_one_implicit_observation():
+    event = _event("station_1", source_id="source_a", scenario_id="demo")
+
+    observations = observations_from_events([event])
+
+    assert len(observations) == 1
+    assert observations[0].station_id == "station_1"
+    assert observations[0].source_hint_id == "source_a"
+    assert observations[0].candidate_id is None
+    assert observations[0].original_event is event
+
+
+def test_event_with_two_detections_expands_to_two_observations():
+    event = _event("station_1", source_id="event_source", scenario_id="demo")
+    event.detections = [
+        AcousticDetectionCandidate(
+            candidate_id="cand_a",
+            source_hint_id="source_a",
+            confidence=0.88,
+            drone_score=0.91,
+            bearing_deg=40.0,
+            f0_hz=1000,
+            harmonic_score=26.0,
+        ),
+        AcousticDetectionCandidate(
+            candidate_id="cand_b",
+            source_hint_id="source_b",
+            confidence=0.84,
+            drone_score=0.89,
+            bearing_deg=220.0,
+            f0_hz=1320,
+            harmonic_score=24.0,
+        ),
+    ]
+
+    observations = observations_from_events([event])
+
+    assert len(observations) == 2
+    assert {observation.candidate_id for observation in observations} == {"cand_a", "cand_b"}
+    assert {observation.source_hint_id for observation in observations} == {"source_a", "source_b"}
+
+
+def test_same_station_two_detections_can_contribute_to_two_tracks():
+    timestamp = time.time()
+    station_a = _event("station_A1", latitude=32.0, longitude=34.0, source_id="target_1", scenario_id="multi")
+    station_a.timestamp_unix = timestamp
+    station_a.server_received_unix = timestamp
+    station_b = _event("station_A2", latitude=32.0, longitude=34.001, source_id=None, scenario_id="multi")
+    station_b.timestamp_unix = timestamp
+    station_b.server_received_unix = timestamp
+    station_b.detections = [
+        AcousticDetectionCandidate(
+            candidate_id="A2_T1",
+            source_hint_id="target_1",
+            confidence=0.92,
+            drone_score=0.93,
+            bearing_deg=35.0,
+            f0_hz=1020,
+            harmonic_score=27.0,
+            metadata={"scenario_id": "multi", "simulated_source_id": "target_1"},
+        ),
+        AcousticDetectionCandidate(
+            candidate_id="A2_T2",
+            source_hint_id="target_2",
+            confidence=0.90,
+            drone_score=0.91,
+            bearing_deg=135.0,
+            f0_hz=1320,
+            harmonic_score=26.0,
+            metadata={"scenario_id": "multi", "simulated_source_id": "target_2"},
+        ),
+    ]
+    station_c = _event("station_A3", latitude=32.0, longitude=34.002, source_id="target_2", scenario_id="multi")
+    station_c.timestamp_unix = timestamp
+    station_c.server_received_unix = timestamp
+
+    tracks = cluster_events_into_tracks([station_a, station_b, station_c])
+    station_sets = {tuple(track.station_ids) for track in tracks}
+
+    assert len(tracks) == 2
+    assert ("station_A1", "station_A2") in station_sets
+    assert ("station_A2", "station_A3") in station_sets
+    assert sum("station_A2" in track.station_ids for track in tracks) == 2
+    assert any(len(track.observations) == 2 for track in tracks)
+
+
+def test_ambiguous_same_station_same_sector_is_not_reported_as_precise_split():
+    event = _event("station_1")
+    event.detections = [
+        AcousticDetectionCandidate(
+            candidate_id="cand_a",
+            confidence=0.86,
+            drone_score=0.88,
+            bearing_deg=60.0,
+            f0_hz=1000,
+            harmonic_score=24.0,
+            metadata={"sector_id": "north_east"},
+        ),
+        AcousticDetectionCandidate(
+            candidate_id="cand_b",
+            confidence=0.84,
+            drone_score=0.86,
+            bearing_deg=64.0,
+            f0_hz=1060,
+            harmonic_score=23.0,
+            metadata={"sector_id": "north_east"},
+        ),
+    ]
+
+    tracks = cluster_events_into_tracks([event])
+
+    assert len(tracks) == 1
+    assert tracks[0].target_count_hint == 2
+    assert tracks[0].ambiguity == "possible split acoustic source; possible 1-2 targets"
+
+
+def test_multi_target_simulation_returns_exactly_two_tracks():
+    fusion = fuse_tracks(build_multi_target_events(targets=2, stations=4))
+    station_sets = {tuple(track.station_ids) for track in fusion.tracks}
+
+    assert len(fusion.tracks) == 2
+    assert ("sim_A1", "sim_A2") in station_sets
+    assert ("sim_A2", "sim_A3", "sim_A4") in station_sets
+    assert sum("sim_A2" in track.station_ids for track in fusion.tracks) == 2

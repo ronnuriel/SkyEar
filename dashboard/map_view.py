@@ -122,6 +122,29 @@ def estimate_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def track_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for track in normalize_map_state(map_state)["tracks"]:
+        latitude = track.get("latitude")
+        longitude = track.get("longitude")
+        if latitude is None or longitude is None:
+            source = track.get("estimated_source") or {}
+            latitude = source.get("latitude")
+            longitude = source.get("longitude")
+        if latitude is None or longitude is None:
+            continue
+        rows.append(
+            {
+                **track,
+                "lat": float(latitude),
+                "lon": float(longitude),
+                "label": f"{track.get('track_id', 'track')} L{track.get('level', 0)}",
+                "color": _track_color(int(track.get("level") or 0)),
+            }
+        )
+    return rows
+
+
 def _station_color(status: str, health: str) -> list[int]:
     if health in {"offline", "stale"}:
         return [130, 130, 130, 180]
@@ -130,6 +153,16 @@ def _station_color(status: str, health: str) -> list[int]:
     if status in {"suspect", "calibrating"}:
         return [240, 190, 40, 220]
     return [40, 170, 80, 220]
+
+
+def _track_color(level: int) -> list[int]:
+    if level >= 3:
+        return [220, 40, 30, 230]
+    if level == 2:
+        return [245, 145, 35, 220]
+    if level == 1:
+        return [240, 190, 40, 210]
+    return [75, 130, 210, 190]
 
 
 def render_passive_map(st, map_state: dict[str, Any]) -> None:
@@ -144,6 +177,7 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
     markers = station_marker_rows(state)
     sectors = sector_polygon_rows(state)
     estimates = estimate_rows(state)
+    tracks = track_rows(state)
     if not markers:
         st.info("No station coordinates available for map rendering.")
         return
@@ -155,6 +189,8 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
             st.dataframe(pd.DataFrame(sectors), width="stretch")
         if estimates:
             st.dataframe(pd.DataFrame(estimates), width="stretch")
+        if tracks:
+            st.dataframe(pd.DataFrame(tracks), width="stretch")
         return
 
     layers = [
@@ -187,6 +223,29 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
                 get_position="[lon, lat]",
                 get_fill_color=[220, 30, 30, 120],
                 get_radius="radius_m || 100",
+                pickable=True,
+            )
+        )
+    if tracks:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=tracks,
+                get_position="[lon, lat]",
+                get_fill_color="color",
+                get_radius=65,
+                pickable=True,
+            )
+        )
+        layers.append(
+            pdk.Layer(
+                "TextLayer",
+                data=tracks,
+                get_position="[lon, lat]",
+                get_text="label",
+                get_color=[20, 20, 20, 230],
+                get_size=14,
+                get_alignment_baseline="'bottom'",
                 pickable=True,
             )
         )

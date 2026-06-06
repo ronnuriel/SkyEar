@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 from server.geo import bearing_sector_polygon, estimate_from_recent_bearings, latest_candidate_bearings
+from server.track_fusion import fuse_tracks
 
 
 def geo_estimates_from_events(events: list[Any], max_age_sec: float = 10.0, now: float | None = None) -> list[dict[str, Any]]:
@@ -38,6 +39,56 @@ def bearing_cues_from_events(events: list[Any], max_age_sec: float = 10.0, now: 
             }
         )
     return cues
+
+
+def map_tracks_from_events(events: list[Any], max_age_sec: float = 10.0) -> list[dict[str, Any]]:
+    tracks = fuse_tracks(events, window_sec=max_age_sec).tracks
+    rows: list[dict[str, Any]] = []
+    for track in tracks:
+        source = track.estimated_source or {}
+        source_ids = sorted(
+            {
+                str(observation.source_hint_id or (observation.metadata or {}).get("simulated_source_id"))
+                for observation in track.observations
+                if observation.source_hint_id is not None or (observation.metadata or {}).get("simulated_source_id") is not None
+            }
+        )
+        eta_values = [
+            float((observation.metadata or {})["target_eta_sec"])
+            for observation in track.observations
+            if (observation.metadata or {}).get("target_eta_sec") is not None
+        ]
+        distance_values = [
+            float((observation.metadata or {})["target_distance_to_control_m"])
+            for observation in track.observations
+            if (observation.metadata or {}).get("target_distance_to_control_m") is not None
+        ]
+        crossed_lines = [
+            str((observation.metadata or {}).get("latest_line_crossed"))
+            for observation in track.observations
+            if (observation.metadata or {}).get("latest_line_crossed") is not None
+        ]
+        rows.append(
+            {
+                "track_id": track.track_id,
+                "source_ids": source_ids,
+                "station_ids": track.station_ids,
+                "level": track.level,
+                "confidence": track.confidence,
+                "interpretation": track.interpretation,
+                "target_count_hint": track.target_count_hint,
+                "ambiguity": track.ambiguity,
+                "estimated_source": track.estimated_source,
+                "latitude": source.get("latitude"),
+                "longitude": source.get("longitude"),
+                "estimate_source": source.get("source"),
+                "observation_count": len(track.observations),
+                "latest_line_crossed": crossed_lines[-1] if crossed_lines else None,
+                "target_eta_sec": min(eta_values) if eta_values else None,
+                "target_distance_to_control_m": min(distance_values) if distance_values else None,
+            }
+        )
+    return rows
 
 
 def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float = 10.0) -> dict[str, Any]:
@@ -84,6 +135,10 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
                 "longitude": longitude,
                 "altitude_m": (event.station_altitude_m if event else None) or event_meta.get("altitude_m") or (heartbeat.get("metadata") or {}).get("altitude_m"),
                 "location_label": (event.station_location_label if event else None) or event_meta.get("location_label") or (heartbeat.get("metadata") or {}).get("location_label"),
+                "line_id": event_meta.get("line_id") or (heartbeat.get("metadata") or {}).get("line_id"),
+                "line_distance_m": event_meta.get("line_distance_m") or (heartbeat.get("metadata") or {}).get("line_distance_m"),
+                "fiber_node_id": event_meta.get("fiber_node_id") or (heartbeat.get("metadata") or {}).get("fiber_node_id"),
+                "fiber_connected": event_meta.get("fiber_connected") or (heartbeat.get("metadata") or {}).get("fiber_connected"),
                 "last_seen_sec_ago": last_seen_sec_ago,
                 "health": health_label,
                 "health_source": health_source,
@@ -115,7 +170,7 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
         "stations": stations,
         "bearing_cues": bearing_cues_from_events(events, max_age_sec=fusion_window_sec, now=now),
         "geo_estimates": geo_estimates_from_events(events, max_age_sec=fusion_window_sec, now=now),
-        "tracks": [],
+        "tracks": map_tracks_from_events(events, max_age_sec=fusion_window_sec),
     }
 
 

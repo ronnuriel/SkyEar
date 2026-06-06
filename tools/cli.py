@@ -263,6 +263,14 @@ def _run_dev(config_path: str, argv: list[str]) -> int:
     if action == "benchmark":
         return _run_with_argv("skyear-run-benchmarks", argv, _benchmark_main)
     if action == "simulate":
+        if argv and argv[0] in {"fiber-grid", "fiber_grid"}:
+            argv.pop(0)
+            return _run_with_argv("skyear-simulate-fiber-grid", argv, _simulate_fiber_grid_main)
+        if argv and argv[0] in {"multi-target", "multi_target"}:
+            argv.pop(0)
+            return _run_with_argv("skyear-simulate-multi-target", argv, _simulate_multi_target_main)
+        if argv and argv[0] == "geo":
+            argv.pop(0)
         return _run_with_argv("skyear-simulate-geo-events", argv, _simulate_main)
     print(f"Unknown dev command: {action}", file=sys.stderr)
     return 2
@@ -282,6 +290,18 @@ def _benchmark_main() -> None:
 
 def _simulate_main() -> None:
     from tools.simulate_geo_events import main as simulate_main
+
+    simulate_main()
+
+
+def _simulate_fiber_grid_main() -> None:
+    from tools.simulate_fiber_grid import main as simulate_main
+
+    simulate_main()
+
+
+def _simulate_multi_target_main() -> None:
+    from tools.simulate_multi_target import main as simulate_main
 
     simulate_main()
 

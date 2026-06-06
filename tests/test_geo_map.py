@@ -16,6 +16,7 @@ from server.geo import (
 from server.geo_fusion import map_state_from_db
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint
 from tools.simulate_geo_events import build_geo_event, build_geo_heartbeat, main as simulate_geo_main
+from tools.simulate_multi_target import build_events as build_multi_target_events
 
 
 def setup_function():
@@ -257,6 +258,20 @@ def test_dashboard_map_state_parser_handles_missing_optional_fields():
 
     assert stations_missing_location(state)[0]["station_id"] == "a"
     assert state["bearing_cues"] == []
+
+
+def test_map_state_exposes_multi_target_tracks():
+    now = time.time()
+    for event in build_multi_target_events(timestamp=now):
+        db.add_event(event)
+
+    state = map_state_from_db(db, now=now + 1.0)
+    station_sets = {tuple(track["station_ids"]) for track in state["tracks"]}
+
+    assert len(state["tracks"]) == 2
+    assert ("sim_A1", "sim_A2") in station_sets
+    assert ("sim_A2", "sim_A3", "sim_A4") in station_sets
+    assert all("track_id" in track for track in state["tracks"])
 
 
 def test_simulated_geo_events_create_map_estimate():
