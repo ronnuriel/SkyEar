@@ -12,6 +12,11 @@ def circular_mic_positions(channels: int, radius_m: float) -> list[list[float]]:
 
 
 ARRAY_PROFILES: dict[str, dict] = {
+    "mono": {
+        "channels": 1,
+        "sync_mode": "mono",
+        "channel_mode": "mono",
+    },
     "mac_builtin_mono": {
         "channels": 1,
         "sync_mode": "mono",
@@ -26,6 +31,28 @@ ARRAY_PROFILES: dict[str, dict] = {
         "channels": 2,
         "sync_mode": "unsynchronized",
         "channel_mode": "dual_mic",
+    },
+    "generic_dual_mic": {
+        "channels": 2,
+        "sync_mode": "unsynchronized",
+        "channel_mode": "dual_mic",
+    },
+    "circular_clockwise": {
+        "channels": "auto",
+        "sync_mode": "synchronized",
+        "channel_mode": "array",
+        "channel_order": "clockwise",
+        "channel_0_heading_deg": 0,
+    },
+    "array_8ch_clockwise_north": {
+        "channels": 8,
+        "radius_m": 0.35,
+        "sync_mode": "synchronized",
+        "channel_mode": "array",
+        "channel_order": "clockwise",
+        "channel_0_heading_deg": 0,
+        "mic_positions_m": circular_mic_positions(8, 0.35),
+        "beamforming": {"low_hz": 500, "high_hz": 3000},
     },
     "compact_8ch_r0_12m": {
         "channels": 8,

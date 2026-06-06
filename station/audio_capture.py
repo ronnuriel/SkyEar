@@ -19,14 +19,36 @@ def _sounddevice():
 
 def list_input_devices():
     sd = _sounddevice()
+    default_input = None
+    try:
+        default_device = getattr(sd, "default", None).device
+        if isinstance(default_device, (tuple, list)):
+            default_input = default_device[0]
+        else:
+            default_input = default_device
+    except Exception:
+        default_input = None
+    try:
+        hostapis = sd.query_hostapis()
+    except Exception:
+        hostapis = []
     out = []
     for idx, d in enumerate(sd.query_devices()):
         if d.get("max_input_channels", 0) > 0:
+            hostapi_index = d.get("hostapi")
+            hostapi_name = None
+            if hostapi_index is not None:
+                try:
+                    hostapi_name = hostapis[int(hostapi_index)].get("name")
+                except Exception:
+                    hostapi_name = None
             out.append({
                 "id": idx,
                 "name": d["name"],
                 "max_input_channels": int(d["max_input_channels"]),
                 "default_samplerate": int(d.get("default_samplerate", 44100)),
+                "hostapi": hostapi_name,
+                "is_default_input": default_input is not None and int(default_input) == idx,
             })
     return out
 

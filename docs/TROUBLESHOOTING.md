@@ -16,6 +16,13 @@ audio:
   capture_block_sec: 0.25
 ```
 
+If the wrong device is selected, run:
+
+```bash
+skyear setup audio
+skyear check audio --dry-run
+```
+
 Direction hints are suppressed when `overflow_recent=true`.
 
 ## Direction Jumps Left/Right

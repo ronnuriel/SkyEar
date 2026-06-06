@@ -12,6 +12,7 @@ Two microphones do not provide true 360 degree bearing. They cannot distinguish 
 Run a live check:
 
 ```bash
+skyear setup volt2
 skyear check two-mic --tracked
 ```
 

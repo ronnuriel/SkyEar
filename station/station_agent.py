@@ -16,6 +16,7 @@ from shared.auth import auth_headers
 from shared.event_schema import AcousticEvent, EventStatus, GeoPoint, StationHeartbeat
 from station.array_calibration import ArrayCalibration, apply_array_calibration, load_calibration
 from station.array_profiles import array_profile
+from station.audio_devices import AudioDeviceError, resolve_station_audio_config
 from station.audio_filters import HighPassFilter
 from station.capture import CapturedAudioBlock, ThreadedAudioCapture, audio_blocks, list_input_devices, select_mono_channel
 from station.detection_pipeline import AsyncHFDetectorRunner, DEFAULT_MODEL_ID, HFDetector, StationDetectorState, StationDetectorStateConfig, harmonic_score
@@ -710,6 +711,11 @@ def main():
 
     cfg = load_config_or_exit(args.config)
     try:
+        cfg, resolved_audio_device = resolve_station_audio_config(cfg)
+    except AudioDeviceError as exc:
+        print(f"[AUDIO] {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    try:
         cfg = apply_mic_array_profile_defaults(cfg)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
@@ -839,13 +845,15 @@ def main():
     audio_device_summary = _selected_audio_device_summary(audio_cfg)
     audio_highpass = _build_audio_highpass_filter(audio_cfg)
     mono_mix_mode = _resolve_mono_mix_mode(audio_cfg, mic_cfg)
-    print(
-        "Audio device:",
-        f"selected_audio_device_id={audio_device_summary['selected_audio_device_id']}",
-        f"selected_audio_device_name={audio_device_summary['selected_audio_device_name']}",
-        f"channels={audio_device_summary['channels']}",
-        f"sample_rate={audio_device_summary['sample_rate']}",
-    )
+    max_inputs = audio_cfg.get("resolved_max_input_channels") or resolved_audio_device.get("max_input_channels")
+    print("[AUDIO]")
+    print(f"device: {audio_device_summary['selected_audio_device_name']}")
+    print(f"device_id: {audio_device_summary['selected_audio_device_id']}")
+    print(f"sample_rate: {audio_device_summary['sample_rate']}")
+    print(f"channels: {audio_device_summary['channels']} / max_input_channels={max_inputs}")
+    print(f"channel_policy: {audio_cfg.get('channel_policy', 'manual')}")
+    print(f"latency: {audio_cfg.get('latency') or 'default'}")
+    print(f"capture_block_sec: {audio_cfg.get('capture_block_sec', audio_cfg.get('window_sec', 1.0))}")
     if audio_highpass is not None:
         print(
             "Audio preprocessing:",
@@ -853,14 +861,25 @@ def main():
             f"highpass_order={audio_highpass.order}",
         )
     print("Audio analysis mono mix:", f"mode={mono_mix_mode}")
+    print("[MIC ARRAY]")
+    print(f"profile: {mic_cfg.get('profile')}")
+    print(f"mode: {mic_cfg.get('channel_mode') or mic_cfg.get('sync_mode')}")
     if two_mic_direction_allowed:
         print(
-            "Two-mic direction:",
-            "enabled",
-            f"spacing_m={float(two_mic_direction_cfg.get('spacing_m', 0.5)):g}",
-            f"left_channel={int(two_mic_direction_cfg.get('left_channel', 0)) + 1}",
-            f"right_channel={int(two_mic_direction_cfg.get('right_channel', 1)) + 1}",
+            "two_mic_direction: enabled",
+            f"spacing_m: {float(two_mic_direction_cfg.get('spacing_m', 0.5)):g}",
+            f"front_heading_deg: {two_mic_direction_cfg.get('front_heading_deg')}",
+            "front/back ambiguous: true",
         )
+    if mic_cfg.get("sync_mode") == "synchronized":
+        print(f"channels: {int(audio_cfg['channels'])}")
+        if mic_cfg.get("radius_m") is not None:
+            print(f"radius_m: {mic_cfg.get('radius_m')}")
+        if mic_cfg.get("channel_0_heading_deg") is not None:
+            print(f"channel_0_heading_deg: {mic_cfg.get('channel_0_heading_deg')}")
+        if mic_cfg.get("channel_order"):
+            print(f"channel_order: {mic_cfg.get('channel_order')}")
+        print(f"generated_positions: {'yes' if mic_cfg.get('mic_positions_m') else 'no'}")
 
     def _record_captured_block(block: CapturedAudioBlock) -> None:
         if block.input_overflow:

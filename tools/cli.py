@@ -34,6 +34,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_recording(config_path, argv)
     if command == "check":
         return _run_check(config_path, argv)
+    if command == "setup":
+        return _run_setup(config_path, argv)
     if command == "dev":
         return _run_dev(config_path, argv)
     if command == "release":
@@ -209,7 +211,9 @@ def _run_check(config_path: str, argv: list[str]) -> int:
         return 0
     action = argv.pop(0)
     if action == "audio":
-        return _run_station(config_path, ["--capture-diagnostic", *argv])
+        from tools.check_audio import main as check_audio_main
+
+        return check_audio_main(_ensure_config_arg(argv, config_path))
     if action == "two-mic":
         from tools.check_two_mic_direction import main as check_two_mic_main
 
@@ -222,6 +226,25 @@ def _run_check(config_path: str, argv: list[str]) -> int:
         return _run_station(config_path, ["--hf-smoke-test", *argv])
     print(f"Unknown check command: {action}", file=sys.stderr)
     return 2
+
+
+def _run_setup(config_path: str, argv: list[str]) -> int:
+    if not argv or argv[0] in {"-h", "--help"}:
+        print("Usage: skyear setup {audio|station|volt2|array} ...")
+        return 0
+    action = argv.pop(0)
+    profile = {
+        "audio": "auto",
+        "station": "auto",
+        "volt2": "volt2_dual_mic",
+        "array": "circular_clockwise",
+    }.get(action)
+    if profile is None:
+        print(f"Unknown setup command: {action}", file=sys.stderr)
+        return 2
+    from tools.setup_audio import main as setup_audio_main
+
+    return setup_audio_main(["--config", config_path, "--profile", profile, *argv])
 
 
 def _check_server_main() -> None:
@@ -343,6 +366,7 @@ SkyEar command groups:
   skyear rec mark <label>        Add recording marker
   skyear rec stop|state|summary  Control or inspect recording
   skyear check audio|two-mic|server|hf
+  skyear setup audio|station|volt2|array
   skyear dev debug-wav|benchmark|simulate
   skyear release preflight
   skyear release tag <version>

@@ -34,6 +34,28 @@ List audio devices:
 skyear station --list-devices
 ```
 
+Generate or update station audio config:
+
+```bash
+skyear setup audio
+skyear setup volt2
+skyear setup array
+skyear setup audio --dry-run
+```
+
+The setup wizard writes:
+
+- `audio.device_id`
+- `audio.device_name`
+- `audio.device_match`
+- `audio.sample_rate`
+- `audio.channels`
+- `audio.channel_policy`
+- `audio.latency`
+- `audio.capture_block_sec`
+
+At runtime SkyEar resolves `device_name`/`device_match` first, then falls back to `device_id`. This helps when macOS/Linux changes device IDs after reconnecting hardware.
+
 Run capture diagnostics:
 
 ```bash

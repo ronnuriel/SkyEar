@@ -14,6 +14,7 @@ def test_skyear_help_prints_command_groups(capsys):
     output = capsys.readouterr().out
     assert "skyear station" in output
     assert "skyear rec start <session>" in output
+    assert "skyear setup audio|station|volt2|array" in output
     assert "skyear release preflight" in output
 
 
@@ -67,6 +68,49 @@ def test_cli_recording_summary_uses_config_root(tmp_path: Path, capsys):
     output = capsys.readouterr().out
     assert '"session_id": "station_test_' in output
     assert '"total_wav_duration_sec": 1.0' in output
+
+
+def test_cli_setup_audio_dry_run_generates_config(monkeypatch, tmp_path: Path, capsys):
+    devices = [
+        {
+            "id": 3,
+            "name": "Universal Audio Volt 2",
+            "max_input_channels": 2,
+            "default_samplerate": 48000,
+            "is_default_input": True,
+        }
+    ]
+    monkeypatch.setattr("tools.setup_audio.list_input_devices", lambda: devices)
+    config_path = tmp_path / "config.yaml"
+
+    assert main(["--config", str(config_path), "setup", "audio", "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Generated config preview" in output
+    assert "volt2_dual_mic" in output
+    assert "device_match: Universal Audio Volt 2" in output
+    assert not config_path.exists()
+
+
+def test_cli_check_audio_dry_run_resolves_device(monkeypatch, tmp_path: Path, capsys):
+    devices = [
+        {
+            "id": 3,
+            "name": "Universal Audio Volt 2",
+            "max_input_channels": 2,
+            "default_samplerate": 48000,
+        }
+    ]
+    monkeypatch.setattr("tools.check_audio.list_input_devices", lambda: devices)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("audio:\n  device_match: Volt 2\n  channels: auto\n", encoding="utf-8")
+
+    assert main(["--config", str(config_path), "check", "audio", "--dry-run"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Configured audio:" in output
+    assert "expected_channels: 2" in output
+    assert "actual_max_input_channels: 2" in output
 
 
 def test_release_tag_version_parser():

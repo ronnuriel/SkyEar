@@ -24,6 +24,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[all,dev]"
 skyear-copy-configs configs
+skyear setup audio
 ```
 
 Run the system in three terminals:
@@ -87,6 +88,7 @@ skyear rec summary
 Checks:
 
 ```bash
+skyear setup audio --dry-run
 skyear check audio --diagnostic-sec 20
 skyear check two-mic --tracked
 skyear check server
