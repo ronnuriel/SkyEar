@@ -8,6 +8,7 @@ from server.database import db
 from server.fusion import fuse_events
 from server.geo_fusion import map_state_from_db
 from server.ptz_dispatcher import dispatch_ptz_for_alert
+from server.recording_commands import pending_recording_commands, pop_recording_command, queue_recording_command
 
 app = FastAPI(title="Drone Acoustic Network API")
 
@@ -54,7 +55,7 @@ def ingest_event(event: AcousticEvent, _: None = Depends(require_station_auth)):
 def ingest_heartbeat(heartbeat: StationHeartbeat, _: None = Depends(require_station_auth)):
     _stamp_receive(heartbeat)
     db.add_heartbeat(heartbeat)
-    command = db.pop_recording_command(heartbeat.station_id)
+    command = pop_recording_command(db, heartbeat.station_id)
     return {"ok": True, "server_received_unix": heartbeat.server_received_unix, "recording_command": command}
 
 @app.get("/stations/heartbeat")
@@ -72,21 +73,21 @@ def get_station_health():
 @app.post("/stations/{station_id}/recording/start")
 def recording_start(station_id: str, body: RecordingCommandBody | None = None):
     payload = (body or RecordingCommandBody()).model_dump(exclude_none=True)
-    command = db.queue_recording_command(station_id, "start", payload)
+    command = queue_recording_command(db, station_id, "start", payload)
     return {"ok": True, "command": command}
 
 
 @app.post("/stations/{station_id}/recording/stop")
 def recording_stop(station_id: str, body: RecordingCommandBody | None = None):
     payload = (body or RecordingCommandBody()).model_dump(exclude_none=True)
-    command = db.queue_recording_command(station_id, "stop", payload)
+    command = queue_recording_command(db, station_id, "stop", payload)
     return {"ok": True, "command": command}
 
 
 @app.post("/stations/{station_id}/recording/mark")
 def recording_mark(station_id: str, body: RecordingCommandBody | None = None):
     payload = (body or RecordingCommandBody()).model_dump(exclude_none=True)
-    command = db.queue_recording_command(station_id, "mark", payload)
+    command = queue_recording_command(db, station_id, "mark", payload)
     return {"ok": True, "command": command}
 
 
@@ -99,7 +100,7 @@ def recording_state(station_id: str):
         "station_id": station_id,
         "state": metadata.get("recording_state") or {},
         "last_command_result": metadata.get("recording_command_result"),
-        "pending_commands": db.pending_recording_commands(station_id),
+        "pending_commands": pending_recording_commands(db, station_id),
     }
 
 @app.get("/events")

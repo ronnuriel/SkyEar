@@ -49,6 +49,7 @@ all = [
 ]
 
 [project.scripts]
+skyear = "tools.cli:main"
 skyear-station = "station.station_agent:main"
 skyear-server = "server.cli:main"
 skyear-dashboard = "dashboard.cli:main_dashboard"
