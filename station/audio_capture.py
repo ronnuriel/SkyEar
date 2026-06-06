@@ -17,17 +17,32 @@ def _sounddevice():
         ) from exc
     return sd
 
+def _default_input_device_id(sd) -> int | None:
+    try:
+        default_device = getattr(getattr(sd, "default", None), "device", None)
+    except Exception:
+        return None
+
+    if default_device is None:
+        return None
+    if isinstance(default_device, (tuple, list)):
+        candidate = default_device[0] if default_device else None
+    elif hasattr(default_device, "input"):
+        candidate = getattr(default_device, "input")
+    else:
+        try:
+            candidate = default_device[0]
+        except Exception:
+            candidate = default_device
+
+    try:
+        return int(candidate)
+    except (TypeError, ValueError):
+        return None
+
 def list_input_devices():
     sd = _sounddevice()
-    default_input = None
-    try:
-        default_device = getattr(sd, "default", None).device
-        if isinstance(default_device, (tuple, list)):
-            default_input = default_device[0]
-        else:
-            default_input = default_device
-    except Exception:
-        default_input = None
+    default_input = _default_input_device_id(sd)
     try:
         hostapis = sd.query_hostapis()
     except Exception:
@@ -48,7 +63,7 @@ def list_input_devices():
                 "max_input_channels": int(d["max_input_channels"]),
                 "default_samplerate": int(d.get("default_samplerate", 44100)),
                 "hostapi": hostapi_name,
-                "is_default_input": default_input is not None and int(default_input) == idx,
+                "is_default_input": default_input is not None and default_input == idx,
             })
     return out
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import station.audio_capture as audio_capture
 from station.audio_devices import (
     AudioDeviceError,
     generate_station_config,
@@ -96,3 +97,35 @@ def test_mono_device_generates_mono_profile():
     assert cfg["mic_array"]["profile"] == "mono"
     assert cfg["mic_array"]["sync_mode"] == "mono"
     assert cfg["two_mic_direction"]["enabled"] is False
+
+
+def test_list_input_devices_handles_sounddevice_default_pair(monkeypatch):
+    class DefaultPair:
+        input = 3
+        output = 8
+
+    class Default:
+        device = DefaultPair()
+
+    class FakeSoundDevice:
+        default = Default()
+
+        @staticmethod
+        def query_hostapis():
+            return [{"name": "Core Audio"}]
+
+        @staticmethod
+        def query_devices():
+            return [
+                {"name": "MacBook Pro Microphone", "max_input_channels": 1, "default_samplerate": 48000, "hostapi": 0},
+                {"name": "Output Only", "max_input_channels": 0, "default_samplerate": 48000, "hostapi": 0},
+                {"name": "Unused Mic", "max_input_channels": 1, "default_samplerate": 48000, "hostapi": 0},
+                {"name": "Universal Audio Volt 2", "max_input_channels": 2, "default_samplerate": 48000, "hostapi": 0},
+            ]
+
+    monkeypatch.setattr(audio_capture, "_sounddevice", lambda: FakeSoundDevice)
+
+    devices = audio_capture.list_input_devices()
+
+    assert devices[-1]["name"] == "Universal Audio Volt 2"
+    assert devices[-1]["is_default_input"] is True
