@@ -117,6 +117,16 @@ def test_audio_highpass_filter_is_optional():
     assert station_agent._build_audio_highpass_filter({"sample_rate": 48000, "channels": 2}) is None
 
 
+def test_hf_effective_config_prefers_run_every_sec_and_expands_max_age():
+    cfg = station_agent._effective_hf_config(
+        {"enabled": True, "run_every_sec": 4.0, "max_age_sec": 2.0},
+        {"window_sec": 1.0},
+    )
+
+    assert station_agent._hf_cadence_sec(cfg, {"window_sec": 1.0}) == 4.0
+    assert cfg["max_age_sec"] >= 10.0
+
+
 def test_heading_offset_is_applied_once_with_wraparound():
     assert station_agent._apply_heading_offset(350.0, 20.0) == 10.0
 

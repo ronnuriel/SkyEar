@@ -173,6 +173,11 @@ def _event_location(event: Any) -> tuple[float | None, float | None, float | Non
 
 def _event_bearing(event: Any) -> float | None:
     metadata = getattr(event, "metadata", {}) or {}
+    possible_front = getattr(event, "possible_front_azimuth_deg", None)
+    if possible_front is None:
+        possible_front = metadata.get("possible_front_azimuth_deg")
+    if metadata.get("two_mic_direction_enabled") and possible_front is None:
+        return None
     used_for_geo = getattr(event, "bearing_used_for_geo", None)
     if used_for_geo is None:
         used_for_geo = metadata.get("bearing_used_for_geo")

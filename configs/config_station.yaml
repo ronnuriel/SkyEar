@@ -14,6 +14,10 @@ audio:
   sample_rate: 48000
   channels: 2
   window_sec: 1.0
+  capture_block_sec: 0.25
+  latency: high
+  overflow_recent_sec: 5.0
+  recording_queue_blocks: 512
   highpass_hz: 300
   highpass_order: 4
   mono_mix_mode: strongest_harmonic
@@ -52,9 +56,11 @@ stability:
 
 hf:
   enabled: true
+  async_enabled: true
+  run_every_sec: 4.0
   run_every_n_windows: 4
   threshold: 0.70
-  max_age_sec: 6.0
+  max_age_sec: 10.0
 
 harmonic:
   lock_enabled: true
@@ -90,9 +96,12 @@ two_mic_direction:
   unstable_sector_width_deg: 120
   far_side_angle_deg: 55
   min_peak_ratio: 1.4
+  min_peak_to_second_peak: 1.15
+  second_peak_exclusion_us: 250
   min_rms: 0.0005
-  smoothing_windows: 5
-  min_stable_windows: 3
+  min_acoustic_evidence_pct: 0.10
+  smoothing_windows: 7
+  min_stable_windows: 4
   max_angle_std_deg: 25
   max_side_flip_rate: 0.35
   min_confidence: 0.45

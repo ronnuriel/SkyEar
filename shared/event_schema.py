@@ -117,6 +117,8 @@ class AcousticEvent(BaseModel):
     two_mic_angle_from_center_deg: Optional[float] = None
     two_mic_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     two_mic_peak_ratio: Optional[float] = None
+    two_mic_peak_to_second_peak: Optional[float] = None
+    two_mic_lag_ambiguity_us: Optional[float] = None
     two_mic_reason: Optional[str] = None
     two_mic_look_label: Optional[str] = None
     two_mic_look_hint: Optional[str] = None
@@ -125,6 +127,9 @@ class AcousticEvent(BaseModel):
     two_mic_direction_stable: Optional[bool] = None
     possible_front_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
     possible_back_azimuth_deg: Optional[float] = Field(default=None, ge=0.0, le=360.0)
+    overflow_recent: Optional[bool] = None
+    overflow_timestamps: list[float] = Field(default_factory=list)
+    recording_continuity_ok: Optional[bool] = None
     track_id: Optional[str] = None
     rms: Optional[float] = None
     peak: Optional[float] = None

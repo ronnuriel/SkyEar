@@ -85,6 +85,7 @@ class RecordingManager:
         self._last_error: str | None = None
         self._last_sample_end_unix: float | None = None
         self._discontinuities: list[dict[str, float]] = []
+        self._overflow_timestamps: list[float] = []
         self._recording_blocks_written = 0
         self._marker_count = 0
 
@@ -117,6 +118,7 @@ class RecordingManager:
             self._last_error = None
             self._last_sample_end_unix = None
             self._discontinuities = []
+            self._overflow_timestamps = []
             self._recording_blocks_written = 0
             self._marker_count = 0
             self._recording = True
@@ -169,6 +171,13 @@ class RecordingManager:
             )
             self._write_metadata()
             return self.state()
+
+    def record_overflow(self, timestamp_unix: float | None = None) -> None:
+        with self._lock:
+            if not self._recording or self._session_dir is None:
+                return
+            self._overflow_timestamps.append(time.time() if timestamp_unix is None else float(timestamp_unix))
+            self._write_metadata()
 
     def append_audio(self, audio: np.ndarray, timestamp: float | None = None) -> None:
         with self._lock:
@@ -225,6 +234,9 @@ class RecordingManager:
                 "marker_count": int(self._marker_count),
                 "recording_blocks_written": int(self._recording_blocks_written),
                 "discontinuities": list(self._discontinuities),
+                "overflow_count": len(self._overflow_timestamps),
+                "overflow_timestamps": list(self._overflow_timestamps),
+                "recording_continuity_ok": self._recording_continuity_ok_locked(),
                 "last_error": self._last_error,
                 "privacy_notice": "Recording may capture voices. Use only where permitted.",
             }
@@ -349,9 +361,15 @@ class RecordingManager:
             "marker_count": int(self._marker_count),
             "recording_blocks_written": int(self._recording_blocks_written),
             "discontinuities": self._discontinuities,
+            "overflow_count": len(self._overflow_timestamps),
+            "overflow_timestamps": self._overflow_timestamps,
+            "recording_continuity_ok": self._recording_continuity_ok_locked(),
             "privacy_notice": "Recording may capture voices. Use only where permitted.",
         }
         (self._session_dir / "metadata.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _recording_continuity_ok_locked(self) -> bool:
+        return not self._discontinuities and not self._overflow_timestamps and self._last_error is None
 
     @staticmethod
     def _disk_usage_bytes(path: Path) -> int:

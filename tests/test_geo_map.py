@@ -135,6 +135,29 @@ def test_unreliable_bearing_is_not_used_for_geo_estimates():
     assert estimate["estimate_type"] == "none"
 
 
+def test_two_mic_without_front_heading_is_not_used_for_geo_estimates():
+    event = _candidate_event(
+        "two_mic",
+        32.0,
+        34.0,
+        60.0,
+        raw_bearing=60.0,
+        tracked_bearing=60.0,
+        bearing_reliable=True,
+        bearing_quality="good",
+        bearing_used_for_geo=True,
+    )
+    event.metadata["two_mic_direction_enabled"] = True
+    event.metadata["possible_front_azimuth_deg"] = None
+
+    estimate = estimate_from_recent_bearings([event], max_age_sec=10.0, now=1001.0)
+    db.add_event(event)
+    state = map_state_from_db(db, now=1001.0)
+
+    assert estimate["estimate_type"] == "none"
+    assert state["stations"][0]["bearing_deg"] is None
+
+
 def test_map_state_includes_stations_and_estimates():
     now = time.time()
     target = {"latitude": 32.0, "longitude": 34.0}

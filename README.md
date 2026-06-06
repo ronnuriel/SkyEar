@@ -601,10 +601,19 @@ Useful recording health fields:
 
 - `recording_blocks_written`
 - `audio_input_overflow_count`
+- `overflow_recent`
+- `overflow_timestamps`
+- `recording_continuity_ok`
 - `detection_blocks_dropped`
 - `capture_queue_depth`
 - `discontinuities`
 - `marker_count`
+
+Summarize the latest recording:
+
+```bash
+skyear-recording-summary --root runtime/recordings
+```
 
 Debug a recorded WAV:
 
@@ -615,7 +624,21 @@ skyear-debug-harmonic-wav runtime/recordings/<session_id>/chunk_0000.wav \
 
 For unsynchronized dual-mic devices such as Volt 2, use `audio.mono_mix_mode: strongest_harmonic` so analysis/HF/spectrogram views do not average two channels that may be phase-shifted enough to cancel each other. Raw recordings still keep all input channels.
 
-For a continuity check, record 180 seconds and compare the sum of `metadata.json` `wav_files[*].duration_sec` to the session duration. They should be close unless `audio_input_overflow_count` or `discontinuities` reports a real capture problem.
+For a continuity check, record 180 seconds and compare the summary `total_wav_duration_sec` to `wall_duration_sec`. They should be close unless `overflow_count`, `audio_input_overflow_count`, or `discontinuities` reports a real capture problem.
+
+If live capture overflows, run:
+
+```bash
+skyear-station --config configs/config_station.yaml --capture-diagnostic --diagnostic-sec 20
+```
+
+For USB interfaces, prefer:
+
+```yaml
+audio:
+  latency: high
+  capture_block_sec: 0.25
+```
 
 Build a local recording manifest:
 

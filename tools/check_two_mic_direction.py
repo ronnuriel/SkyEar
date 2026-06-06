@@ -75,6 +75,8 @@ def _estimate(audio, sample_rate: int, cfg: dict[str, Any]) -> TwoMicDirectionRe
         unstable_sector_width_deg=float(cfg.get("unstable_sector_width_deg", 120.0)),
         far_side_angle_deg=float(cfg.get("far_side_angle_deg", 55.0)),
         min_peak_ratio=float(cfg.get("min_peak_ratio", 1.4)),
+        min_peak_to_second_peak=float(cfg.get("min_peak_to_second_peak", 1.15)),
+        second_peak_exclusion_us=float(cfg.get("second_peak_exclusion_us", 250.0)),
         min_rms=float(cfg.get("min_rms", 0.0005)),
         front_heading_deg=_optional_float(cfg.get("front_heading_deg")),
     )
@@ -116,6 +118,8 @@ def _format_result(result: TwoMicDirectionResult) -> str:
         f"angle_from_center_deg={_fmt(result.angle_from_center_deg, digits=1)}",
         f"confidence={_fmt(result.confidence, digits=2)}",
         f"peak_ratio={_fmt(result.peak_ratio, digits=2)}",
+        f"peak_to_second_peak={_fmt(result.peak_to_second_peak, digits=2)}",
+        f"lag_ambiguity_us={_fmt(result.lag_ambiguity_us, digits=0)}",
         f"stable={int(bool(result.stable))}",
         f"front_back_ambiguous={int(bool(result.front_back_ambiguous))}",
         f"look={json.dumps(result.look_hint or 'DIRECTION UNKNOWN - scan left and right, front/back ambiguous')}",

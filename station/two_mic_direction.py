@@ -15,6 +15,8 @@ class TwoMicDirectionResult:
     delay_us: float | None = None
     confidence: float | None = None
     peak_ratio: float | None = None
+    peak_to_second_peak: float | None = None
+    lag_ambiguity_us: float | None = None
     reason: str | None = None
     angle_from_center_deg: float | None = None
     look_label: str = "unknown"
@@ -44,6 +46,8 @@ def estimate_two_mic_side(
     unstable_sector_width_deg: float = 120.0,
     far_side_angle_deg: float = 55.0,
     min_peak_ratio: float = 1.2,
+    min_peak_to_second_peak: float = 1.15,
+    second_peak_exclusion_us: float = 250.0,
     min_rms: float = 1e-5,
     front_heading_deg: float | None = None,
 ) -> TwoMicDirectionResult:
@@ -87,15 +91,39 @@ def estimate_two_mic_side(
     peak = float(corr[peak_idx])
     median = float(np.nanmedian(corr) + 1e-12)
     peak_ratio = float(peak / median)
+    second_peak, second_lag = _second_peak(
+        corr,
+        lags,
+        peak_idx,
+        sample_rate=int(sample_rate),
+        exclusion_us=float(second_peak_exclusion_us),
+    )
+    peak_to_second_peak = None if second_peak is None or second_peak <= 0.0 else float(peak / max(second_peak, 1e-12))
+    lag_ambiguity_us = None if second_lag is None else abs(float(lag - second_lag) / int(sample_rate) * 1_000_000.0)
     if peak_ratio < float(min_peak_ratio):
         return TwoMicDirectionResult(
             side="uncertain",
             delay_us=delay_us,
             confidence=0.0,
             peak_ratio=peak_ratio,
+            peak_to_second_peak=peak_to_second_peak,
+            lag_ambiguity_us=lag_ambiguity_us,
             reason="weak_correlation_peak",
             look_label="unknown",
             look_hint="DIRECTION UNKNOWN - scan left and right, front/back ambiguous",
+            sector_width_deg=float(unstable_sector_width_deg),
+        )
+    if peak_to_second_peak is not None and peak_to_second_peak < float(min_peak_to_second_peak):
+        return TwoMicDirectionResult(
+            side="uncertain",
+            delay_us=delay_us,
+            confidence=0.0,
+            peak_ratio=peak_ratio,
+            peak_to_second_peak=peak_to_second_peak,
+            lag_ambiguity_us=lag_ambiguity_us,
+            reason="ambiguous_periodic_correlation",
+            look_label="unknown",
+            look_hint="DIRECTION UNKNOWN - ambiguous periodic correlation, front/back ambiguous",
             sector_width_deg=float(unstable_sector_width_deg),
         )
 
@@ -131,6 +159,8 @@ def estimate_two_mic_side(
         delay_us=delay_us,
         confidence=confidence,
         peak_ratio=peak_ratio,
+        peak_to_second_peak=peak_to_second_peak,
+        lag_ambiguity_us=lag_ambiguity_us,
         reason=None,
         angle_from_center_deg=angle,
         look_label=look_label,
@@ -161,6 +191,30 @@ def _center_delay_us(spacing_m: float, center_deadzone_deg: float) -> float:
     max_delay_sec = float(spacing_m) / SPEED_OF_SOUND
     deadzone_rad = math.radians(max(0.0, min(89.0, float(center_deadzone_deg))))
     return float(max_delay_sec * math.sin(deadzone_rad) * 1_000_000.0)
+
+
+def _second_peak(
+    corr: np.ndarray,
+    lags: np.ndarray,
+    peak_idx: int,
+    *,
+    sample_rate: int,
+    exclusion_us: float,
+) -> tuple[float | None, int | None]:
+    if corr.size <= 1:
+        return None, None
+    exclusion_samples = max(1, int(round(float(exclusion_us) / 1_000_000.0 * int(sample_rate))))
+    mask = np.ones(corr.shape, dtype=bool)
+    peak_lag = int(lags[int(peak_idx)])
+    mask[np.abs(lags - peak_lag) <= exclusion_samples] = False
+    if not mask.any():
+        return None, None
+    candidate = np.asarray(corr, dtype=np.float64)
+    masked = np.where(mask, candidate, -np.inf)
+    second_idx = int(np.nanargmax(masked))
+    if not np.isfinite(masked[second_idx]):
+        return None, None
+    return float(candidate[second_idx]), int(lags[second_idx])
 
 
 def _look_hint(

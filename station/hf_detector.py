@@ -53,6 +53,11 @@ class HFDetector:
     def model_loaded(self) -> bool:
         return self._model is not None and self._extractor is not None
 
+    def warm_up(self) -> HFDetectionResult:
+        if self._ensure_loaded():
+            return HFDetectionResult(label="model_loaded")
+        return HFDetectionResult(error=self._load_error)
+
     def predict(self, audio_mono: np.ndarray, sr: int) -> HFDetectionResult:
         if not self._ensure_loaded():
             return HFDetectionResult(error=self._load_error)

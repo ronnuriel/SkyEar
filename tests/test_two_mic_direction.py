@@ -197,6 +197,28 @@ def test_uncertain_when_signal_is_too_low():
     assert result.look_label == "unknown"
 
 
+def test_rejects_ambiguous_periodic_correlation():
+    sample_rate = 48000
+    t = np.arange(sample_rate, dtype=np.float32) / sample_rate
+    tone = np.sin(2 * np.pi * 1000 * t).astype(np.float32)
+    audio = np.stack([tone, tone], axis=1)
+
+    result = estimate_two_mic_side(
+        audio,
+        sample_rate,
+        spacing_m=2.0,
+        center_deadzone_deg=12,
+        min_peak_ratio=1.1,
+        min_peak_to_second_peak=1.5,
+        min_rms=1e-5,
+    )
+
+    assert result.side == "uncertain"
+    assert result.reason == "ambiguous_periodic_correlation"
+    assert result.peak_to_second_peak is not None
+    assert result.lag_ambiguity_us is not None
+
+
 def _raw_result(side: str, angle: float) -> TwoMicDirectionResult:
     return TwoMicDirectionResult(
         side=side,

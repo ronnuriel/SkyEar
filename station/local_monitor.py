@@ -121,6 +121,10 @@ def history_row_from_event(event: AcousticEvent) -> dict[str, Any]:
         "two_mic_front_back_ambiguous": event.two_mic_front_back_ambiguous
         if event.two_mic_front_back_ambiguous is not None
         else metadata.get("two_mic_front_back_ambiguous"),
+        "overflow_recent": event.overflow_recent if event.overflow_recent is not None else metadata.get("overflow_recent"),
+        "recording_continuity_ok": event.recording_continuity_ok
+        if event.recording_continuity_ok is not None
+        else metadata.get("recording_continuity_ok"),
     }
 
 
@@ -211,6 +215,12 @@ def build_local_monitor_snapshot(
         "two_mic_peak_ratio": event.two_mic_peak_ratio
         if event.two_mic_peak_ratio is not None
         else metadata.get("two_mic_peak_ratio"),
+        "two_mic_peak_to_second_peak": event.two_mic_peak_to_second_peak
+        if event.two_mic_peak_to_second_peak is not None
+        else metadata.get("two_mic_peak_to_second_peak"),
+        "two_mic_lag_ambiguity_us": event.two_mic_lag_ambiguity_us
+        if event.two_mic_lag_ambiguity_us is not None
+        else metadata.get("two_mic_lag_ambiguity_us"),
         "two_mic_reason": event.two_mic_reason or metadata.get("two_mic_reason"),
         "two_mic_look_label": event.two_mic_look_label or metadata.get("two_mic_look_label"),
         "two_mic_look_hint": event.two_mic_look_hint or metadata.get("two_mic_look_hint"),
@@ -231,6 +241,7 @@ def build_local_monitor_snapshot(
         "possible_back_azimuth_deg": event.possible_back_azimuth_deg
         if event.possible_back_azimuth_deg is not None
         else metadata.get("possible_back_azimuth_deg"),
+        "two_mic_suppressed_reason": metadata.get("two_mic_suppressed_reason"),
         "two_mic_spacing_m": metadata.get("two_mic_spacing_m"),
     }
     if beam_result is not None:
@@ -251,6 +262,13 @@ def build_local_monitor_snapshot(
             "kept_channels": metadata.get("kept_channels"),
             "calibration_loaded": metadata.get("calibration_loaded"),
             "calibration_file": metadata.get("calibration_file"),
+            "audio_input_overflow_count": metadata.get("audio_input_overflow_count"),
+            "overflow_recent": event.overflow_recent if event.overflow_recent is not None else metadata.get("overflow_recent"),
+            "overflow_recent_count": metadata.get("overflow_recent_count"),
+            "overflow_timestamps": event.overflow_timestamps or metadata.get("overflow_timestamps"),
+            "recording_continuity_ok": event.recording_continuity_ok
+            if event.recording_continuity_ok is not None
+            else metadata.get("recording_continuity_ok"),
         },
         "spectrum": dict(spectrum),
         "spectrogram": dict(spectrogram),

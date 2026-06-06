@@ -12,6 +12,7 @@ from station.audio_capture import CapturedAudioBlock, ThreadedAudioCapture
 from station.recording_manager import RecordingManager
 from station.station_agent import _finalize_station_recording
 from tools.build_recording_manifest import build_manifest
+from tools.summarize_recording import summarize_recording_session
 
 
 def _manager(tmp_path: Path, channels: int = 1, **cfg) -> RecordingManager:
@@ -215,6 +216,39 @@ def test_threaded_capture_keeps_recording_continuous_when_detection_lags(tmp_pat
     assert processed < total_blocks
 
 
+def test_threaded_capture_aggregates_small_capture_blocks_for_detection():
+    sample_rate = 100
+
+    def source():
+        for idx in range(4):
+            start = float(idx) * 0.25
+            yield CapturedAudioBlock(
+                audio=np.full((25, 1), idx, dtype=np.float32),
+                start_unix=start,
+                end_unix=start + 0.25,
+                input_overflow=idx == 2,
+            )
+
+    capture = ThreadedAudioCapture(
+        device_id=None,
+        sample_rate=sample_rate,
+        channels=1,
+        window_sec=1.0,
+        capture_block_sec=0.25,
+        queue_size=2,
+        source=source,
+    )
+
+    capture.start()
+    blocks = list(capture.blocks())
+    capture.stop()
+
+    assert len(blocks) == 1
+    assert blocks[0].audio.shape == (100, 1)
+    assert blocks[0].input_overflow is True
+    assert capture.stats(now=1.0)["overflow_recent"] is True
+
+
 def test_recording_manager_disk_limit_prevents_new_recording(tmp_path: Path):
     root = tmp_path / "recordings"
     root.mkdir()
@@ -242,3 +276,42 @@ def test_recording_manifest_finds_recorded_wavs(tmp_path: Path):
     assert rows[0]["wav_path"].endswith(".wav")
     assert rows[0]["station_id"] == "station_test"
     assert rows[0]["label_from_markers"] == "hover"
+
+
+def test_recording_manager_180s_simulated_continuous_recording_summary(tmp_path: Path):
+    manager = RecordingManager(
+        station_id="station_test",
+        sample_rate=10,
+        channels=1,
+        config={"enabled": True, "root": str(tmp_path / "recordings"), "chunk_sec": 60, "max_disk_gb": 20},
+    )
+
+    manager.start_recording("continuous_180")
+    for idx in range(180):
+        manager.append_audio(np.ones((10, 1), dtype=np.float32), timestamp=1000.0 + idx)
+    state = manager.stop_recording()
+
+    summary = summarize_recording_session(state["session_dir"])
+
+    assert summary["wav_count"] == 3
+    assert abs(summary["total_wav_duration_sec"] - 180.0) < 1e-6
+    assert abs(summary["wall_duration_sec"] - 180.0) < 1e-6
+    assert abs(summary["duration_diff_sec"]) < 1e-6
+    assert summary["marker_count"] == 0
+    assert summary["overflow_count"] == 0
+    assert summary["recording_continuity_ok"] is True
+    assert state["recording_continuity_ok"] is True
+
+
+def test_recording_manager_overflow_marks_continuity_not_ok(tmp_path: Path):
+    manager = _manager(tmp_path, channels=1)
+
+    manager.start_recording("overflow")
+    manager.record_overflow(101.0)
+    manager.append_audio(np.zeros((800, 1), dtype=np.float32), timestamp=100.0)
+    state = manager.stop_recording()
+
+    summary = summarize_recording_session(state["session_dir"])
+    assert state["overflow_count"] == 1
+    assert state["recording_continuity_ok"] is False
+    assert summary["overflow_count"] == 1

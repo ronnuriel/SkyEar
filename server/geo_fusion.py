@@ -62,7 +62,11 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
             used_for_geo = event.bearing_used_for_geo
             if used_for_geo is None:
                 used_for_geo = event_meta.get("bearing_used_for_geo")
-            if used_for_geo is not False:
+            possible_front = event.possible_front_azimuth_deg
+            if possible_front is None:
+                possible_front = event_meta.get("possible_front_azimuth_deg")
+            two_mic_without_heading = bool(event_meta.get("two_mic_direction_enabled")) and possible_front is None
+            if used_for_geo is not False and not two_mic_without_heading:
                 if event.tracked_bearing_deg is not None:
                     bearing = event.tracked_bearing_deg
                 elif event.estimated_azimuth_deg is not None:

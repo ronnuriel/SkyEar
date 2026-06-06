@@ -187,6 +187,11 @@ def _warning_messages(
         messages.append(f"Server send failed: {server['last_send_error']}")
     if server.get("last_heartbeat_error"):
         messages.append(f"Heartbeat failed: {server['last_heartbeat_error']}")
+    audio = snapshot.get("audio") or {}
+    if event.get("overflow_recent") or audio.get("overflow_recent"):
+        messages.append("Audio overflow increased recently; direction hint suppressed")
+    if event.get("recording_continuity_ok") is False or audio.get("recording_continuity_ok") is False:
+        messages.append("Recording continuity is not OK")
     peak = float(event.get("peak") or 0.0)
     rms = float(event.get("rms") or 0.0)
     if peak >= 0.95:
@@ -261,11 +266,21 @@ def _show_recording_controls(recording: dict[str, Any], event: dict[str, Any]) -
             st.rerun()
 
 
-def _show_direction_hint(beam: dict[str, Any]) -> None:
+def _show_direction_hint(beam: dict[str, Any], event: dict[str, Any], audio: dict[str, Any]) -> None:
     if not beam.get("two_mic_direction_enabled"):
         return
     label = str(beam.get("two_mic_look_label") or "unknown").replace("_", " ").upper()
     hint = str(beam.get("two_mic_look_hint") or "DIRECTION UNKNOWN - scan left and right")
+    hidden_reason = beam.get("two_mic_suppressed_reason")
+    overflow_recent = bool(event.get("overflow_recent") or audio.get("overflow_recent"))
+    if overflow_recent:
+        label = "UNKNOWN / OVERFLOW"
+        hint = "DIRECTION HIDDEN - recent audio overflow, front/back ambiguous"
+        hidden_reason = hidden_reason or "overflow_recent"
+    elif _background_without_acoustic_evidence(event):
+        label = "UNKNOWN / BACKGROUND"
+        hint = "DIRECTION HIDDEN - no acoustic evidence, front/back ambiguous"
+        hidden_reason = hidden_reason or "no_acoustic_evidence"
     angle = beam.get("two_mic_angle_from_center_deg")
     sector = beam.get("two_mic_sector_width_deg")
     confidence = beam.get("two_mic_confidence")
@@ -274,10 +289,10 @@ def _show_direction_hint(beam: dict[str, Any]) -> None:
     window_count = beam.get("two_mic_tracker_window_count")
     with st.container(border=True):
         st.markdown("#### Direction hint")
-        if stable:
+        if stable and not hidden_reason:
             st.success(f"### {label}")
         else:
-            st.warning("### UNKNOWN / UNSTABLE")
+            st.warning(f"### {label if label.startswith('UNKNOWN') else 'UNKNOWN / UNSTABLE'}")
         st.markdown(f"**{hint}**")
         cols = st.columns(5)
         cols[0].metric(
@@ -291,6 +306,16 @@ def _show_direction_hint(beam: dict[str, Any]) -> None:
         cols[2].metric("Confidence", _metric_pct(confidence))
         cols[3].metric("Stable", f"{stable_count or 0}/{window_count or 0}")
         cols[4].metric("Ambiguity", "front/back")
+        if hidden_reason:
+            st.caption(f"Direction hidden reason: {hidden_reason}")
+        peak2 = beam.get("two_mic_peak_to_second_peak")
+        lag_ambiguity = beam.get("two_mic_lag_ambiguity_us")
+        if peak2 is not None or lag_ambiguity is not None:
+            st.caption(
+                "Correlation ambiguity: "
+                + (f"peak/second {float(peak2):.2f}x, " if peak2 is not None else "")
+                + (f"lag gap {float(lag_ambiguity):.0f} us" if lag_ambiguity is not None else "")
+            )
         front = beam.get("possible_front_azimuth_deg")
         back = beam.get("possible_back_azimuth_deg")
         if front is not None and back is not None:
@@ -300,6 +325,20 @@ def _show_direction_hint(beam: dict[str, Any]) -> None:
             )
         if beam.get("two_mic_reason"):
             st.caption(f"Two-mic reason: {beam.get('two_mic_reason')}")
+
+
+def _background_without_acoustic_evidence(event: dict[str, Any]) -> bool:
+    status = str(event.get("status") or "background")
+    if status != "background":
+        return False
+    metadata = event.get("metadata") or {}
+    harmonic = event.get("harmonic_evidence_pct_smoothed")
+    if harmonic is None:
+        harmonic = metadata.get("harmonic_evidence_pct_smoothed")
+    combined = event.get("combined_drone_evidence_pct")
+    if combined is None:
+        combined = metadata.get("combined_drone_evidence_pct")
+    return float(harmonic or 0.0) < 0.10 and float(combined or 0.0) < 0.10
 
 
 def main() -> None:
@@ -345,7 +384,7 @@ def main() -> None:
     with warnings_panel:
         _show_warnings(snapshot, event, hf, server)
     _show_recording_controls(recording, event)
-    _show_direction_hint(beam)
+    _show_direction_hint(beam, event, snapshot["audio"])
 
     cols = st.columns(6)
     cols[0].metric("HF drone", _metric_pct(event.get("hf_p_drone") or hf.get("p_drone")))

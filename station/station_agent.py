@@ -23,6 +23,7 @@ from station.bearing_tracker import BearingTracker, bearing_tracker_config_from_
 from station.detector_state import StationDetectorState, StationDetectorStateConfig
 from station.direction import estimate_azimuth
 from station.harmonic import harmonic_score
+from station.hf_async import AsyncHFDetectorRunner
 from station.hf_detector import DEFAULT_MODEL_ID, HFDetector
 from station.local_monitor import (
     atomic_write_json,
@@ -464,6 +465,43 @@ def _build_hf_detector(hf_cfg: dict[str, Any]) -> HFDetector:
     )
 
 
+def _hf_cadence_sec(hf_cfg: dict[str, Any], audio_cfg: dict[str, Any]) -> float:
+    if hf_cfg.get("run_every_sec") not in (None, ""):
+        return max(0.1, float(hf_cfg.get("run_every_sec")))
+    run_every_windows = max(1, int(hf_cfg.get("run_every_n_windows", 2)))
+    return max(0.1, run_every_windows * float(audio_cfg.get("window_sec", 1.0)))
+
+
+def _effective_hf_config(hf_cfg: dict[str, Any], audio_cfg: dict[str, Any]) -> dict[str, Any]:
+    resolved = dict(hf_cfg or {})
+    cadence_sec = _hf_cadence_sec(resolved, audio_cfg)
+    min_age = max(cadence_sec * 2.5, cadence_sec + 1.0)
+    configured_age = resolved.get("max_age_sec")
+    if configured_age in (None, "") or float(configured_age) < min_age:
+        resolved["max_age_sec"] = min_age
+    return resolved
+
+
+def _acoustic_direction_supported(frame: Any, two_mic_cfg: dict[str, Any]) -> bool:
+    min_evidence = float(two_mic_cfg.get("min_acoustic_evidence_pct", 0.10))
+    evidence = frame.harmonic_evidence_pct_smoothed
+    if evidence is not None and float(evidence) >= min_evidence:
+        return True
+    if bool(getattr(frame, "harmonic_soft_present", False)):
+        return True
+    return str(getattr(frame, "status", "background")) != "background" and float(frame.harmonic_score_smoothed or 0.0) > 0.0
+
+
+def _suppress_two_mic_direction(result: TwoMicDirectionResult, reason: str, sector_width_deg: float) -> TwoMicDirectionResult:
+    result.stable = False
+    result.look_label = "unknown"
+    result.look_hint = f"DIRECTION HIDDEN - {reason}, front/back ambiguous"
+    result.sector_width_deg = float(sector_width_deg)
+    result.front_back_ambiguous = True
+    result.reason = reason if not result.reason else f"{result.reason};{reason}"
+    return result
+
+
 def _station_auth_headers(payload: dict[str, Any], server_cfg: dict[str, Any]) -> dict[str, str]:
     return auth_headers(
         payload,
@@ -576,7 +614,7 @@ def run_hf_smoke_test(cfg: dict[str, Any]) -> int:
         cfg.get("detection", {}),
         cfg.get("harmonic", {}),
     )
-    hf_cfg = cfg.get("hf", {})
+    hf_cfg = _effective_hf_config(cfg.get("hf", {}), cfg.get("audio", {}))
     detector = _build_hf_detector(hf_cfg)
     audio_highpass = _build_audio_highpass_filter(audio_cfg)
     print("Capturing 1.0s audio for HF smoke test...")
@@ -607,11 +645,59 @@ def run_hf_smoke_test(cfg: dict[str, Any]) -> int:
     print(f"label: {result.label}")
     return 0
 
+
+def run_capture_diagnostic(cfg: dict[str, Any], duration_sec: float = 10.0) -> int:
+    audio_cfg = cfg["audio"]
+    capture = ThreadedAudioCapture(
+        device_id=audio_cfg.get("device_id"),
+        sample_rate=int(audio_cfg["sample_rate"]),
+        channels=int(audio_cfg["channels"]),
+        window_sec=float(audio_cfg.get("window_sec", 1.0)),
+        capture_block_sec=float(audio_cfg.get("capture_block_sec", audio_cfg.get("window_sec", 1.0))),
+        latency=audio_cfg.get("latency"),
+        queue_size=int(audio_cfg.get("capture_queue_blocks", 4)),
+        overflow_recent_sec=float(audio_cfg.get("overflow_recent_sec", 5.0)),
+    )
+    print(
+        "Capture diagnostic:",
+        f"device_id={audio_cfg.get('device_id')}",
+        f"sample_rate={int(audio_cfg['sample_rate'])}",
+        f"channels={int(audio_cfg['channels'])}",
+        f"window_sec={float(audio_cfg.get('window_sec', 1.0)):g}",
+        f"capture_block_sec={float(audio_cfg.get('capture_block_sec', audio_cfg.get('window_sec', 1.0))):g}",
+        f"latency={audio_cfg.get('latency') or 'default'}",
+    )
+    start = time.time()
+    capture.start()
+    try:
+        for block in capture.blocks():
+            now = time.time()
+            stats = capture.stats(now=now)
+            print(
+                f"{time.strftime('%H:%M:%S')} "
+                f"block_samples={block.audio.shape[0]} overflow={1 if block.input_overflow else 0} "
+                f"overflow_recent={1 if stats.get('overflow_recent') else 0} "
+                f"overflow_count={stats.get('audio_input_overflow_count')} "
+                f"cap_blocks={stats.get('capture_blocks_seen')} "
+                f"cap_q={stats.get('capture_queue_depth')} "
+                f"drop={stats.get('detection_blocks_dropped')} "
+                f"last_error={stats.get('capture_last_error') or '-'}"
+            )
+            if now - start >= float(duration_sec):
+                break
+    finally:
+        capture.stop()
+    final_stats = capture.stats()
+    print("Capture diagnostic done:", json.dumps(final_stats, sort_keys=True, default=str))
+    return 0
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--list-devices", action="store_true")
     parser.add_argument("--hf-smoke-test", action="store_true")
+    parser.add_argument("--capture-diagnostic", action="store_true")
+    parser.add_argument("--diagnostic-sec", type=float, default=10.0)
     args = parser.parse_args()
 
     if args.list_devices:
@@ -627,6 +713,8 @@ def main():
         raise SystemExit(2) from exc
     if args.hf_smoke_test:
         raise SystemExit(run_hf_smoke_test(cfg))
+    if args.capture_diagnostic:
+        raise SystemExit(run_capture_diagnostic(cfg, duration_sec=float(args.diagnostic_sec)))
 
     station_cfg, audio_cfg = cfg["station"], cfg["audio"]
     station_id = _station_id(station_cfg)
@@ -650,13 +738,27 @@ def main():
     bearing_tracker = BearingTracker(bearing_tracker_config_from_direction(dir_cfg))
     two_mic_tracker = TwoMicDirectionTracker(two_mic_tracker_config_from_dict(two_mic_direction_cfg))
     hf_detector = None
+    hf_async_runner: AsyncHFDetectorRunner | None = None
     if bool(hf_cfg.get("enabled", False)):
         hf_detector = _build_hf_detector(hf_cfg)
+        print("HF warmup: loading model before opening audio stream...")
+        warmup_result = hf_detector.warm_up()
+        if warmup_result.error:
+            print(f"HF warmup error: {warmup_result.error}")
+        else:
+            print("HF warmup OK")
+        if bool(hf_cfg.get("async_enabled", True)):
+            hf_async_runner = AsyncHFDetectorRunner(hf_detector)
+            hf_async_runner.start()
+            atexit.register(hf_async_runner.stop)
     hf_error_reporter = HFErrorReporter()
+    hf_run_every_sec = _hf_cadence_sec(hf_cfg, audio_cfg)
     hf_run_every = max(1, int(hf_cfg.get("run_every_n_windows", 2)))
     window_index = 0
     last_hf_result = None
     last_hf_at = None
+    last_hf_submit_at = None
+    last_hf_completed_seen = None
     last_send = 0.0
     last_heartbeat = 0.0
     last_error = None
@@ -758,6 +860,8 @@ def main():
         )
 
     def _record_captured_block(block: CapturedAudioBlock) -> None:
+        if block.input_overflow:
+            recording_manager.record_overflow(block.end_unix)
         recording_manager.append_audio(block.audio, timestamp=block.start_unix)
         if raw_recorder is not None:
             raw_recorder.append(block.audio)
@@ -767,7 +871,11 @@ def main():
         sample_rate=int(audio_cfg["sample_rate"]),
         channels=int(audio_cfg["channels"]),
         window_sec=float(audio_cfg.get("window_sec", 1.0)),
+        capture_block_sec=float(audio_cfg.get("capture_block_sec", audio_cfg.get("window_sec", 1.0))),
+        latency=audio_cfg.get("latency"),
         queue_size=int(audio_cfg.get("capture_queue_blocks", 4)),
+        on_block_queue_size=int(audio_cfg.get("recording_queue_blocks", 256)),
+        overflow_recent_sec=float(audio_cfg.get("overflow_recent_sec", 5.0)),
         on_block=_record_captured_block,
     )
     _install_recording_shutdown_finalizer(recording_manager, recording_control, capture_worker)
@@ -776,7 +884,7 @@ def main():
         audio = captured.audio
         now = float(captured.end_unix)
         sample_rate = int(audio_cfg["sample_rate"])
-        capture_stats = capture_worker.stats()
+        capture_stats = capture_worker.stats(now=now)
         if audio_highpass is not None:
             audio = audio_highpass.process(audio)
         mono, selected_mono_channel, channel_rms, channel_harmonic_scores = _analysis_mono(
@@ -785,9 +893,27 @@ def main():
             mono_mix_mode,
             detector_state_config,
         )
-        if hf_detector is not None and window_index % hf_run_every == 0:
-            last_hf_result = hf_detector.predict(mono, sample_rate)
-            last_hf_at = now
+        if hf_detector is not None:
+            hf_due_by_sec = last_hf_submit_at is None or now - float(last_hf_submit_at) >= float(hf_run_every_sec)
+            hf_due_by_window = hf_cfg.get("run_every_sec") in (None, "") and window_index % hf_run_every == 0
+            if hf_due_by_sec or hf_due_by_window:
+                if hf_async_runner is not None:
+                    if hf_async_runner.submit(mono, sample_rate, now):
+                        last_hf_submit_at = now
+                else:
+                    last_hf_result = hf_detector.predict(mono, sample_rate)
+                    last_hf_at = now
+                    last_hf_submit_at = now
+            if hf_async_runner is not None:
+                async_state = hf_async_runner.state()
+                if (
+                    async_state.latest_result is not None
+                    and async_state.latest_completed_unix is not None
+                    and async_state.latest_completed_unix != last_hf_completed_seen
+                ):
+                    last_hf_result = async_state.latest_result
+                    last_hf_at = async_state.latest_started_unix or async_state.latest_completed_unix
+                    last_hf_completed_seen = async_state.latest_completed_unix
         hf_age_sec = None if last_hf_at is None else max(0.0, now - float(last_hf_at))
         hf_p_drone = last_hf_result.p_drone if last_hf_result is not None else None
         hf_error_message = last_hf_result.error if last_hf_result is not None else None
@@ -914,10 +1040,25 @@ def main():
                 unstable_sector_width_deg=float(two_mic_direction_cfg.get("unstable_sector_width_deg", 120.0)),
                 far_side_angle_deg=float(two_mic_direction_cfg.get("far_side_angle_deg", 55.0)),
                 min_peak_ratio=float(two_mic_direction_cfg.get("min_peak_ratio", 1.4)),
+                min_peak_to_second_peak=float(two_mic_direction_cfg.get("min_peak_to_second_peak", 1.15)),
+                second_peak_exclusion_us=float(two_mic_direction_cfg.get("second_peak_exclusion_us", 250.0)),
                 min_rms=float(two_mic_direction_cfg.get("min_rms", 1e-5)),
                 front_heading_deg=_optional_float(two_mic_direction_cfg.get("front_heading_deg")),
             )
             two_mic = two_mic_tracker.update(now, two_mic)
+            two_mic_suppressed_reason = None
+            if bool(capture_stats.get("overflow_recent")):
+                two_mic_suppressed_reason = "overflow_recent"
+            elif not _acoustic_direction_supported(frame, two_mic_direction_cfg):
+                two_mic_suppressed_reason = "no_acoustic_evidence"
+            if two_mic_suppressed_reason:
+                two_mic = _suppress_two_mic_direction(
+                    two_mic,
+                    two_mic_suppressed_reason,
+                    float(two_mic_direction_cfg.get("unstable_sector_width_deg", 120.0)),
+                )
+        else:
+            two_mic_suppressed_reason = None
         raw_azimuth = _apply_heading_offset(azimuth, station_geo["station_heading_offset_deg"])
         raw_bearing_reliable = bool(getattr(beam, "bearing_reliable", False)) if beamforming_allowed else raw_azimuth is not None
         bearing_quality = bearing_quality_from_result(beam) if raw_azimuth is not None else None
@@ -1035,6 +1176,8 @@ def main():
             two_mic_angle_from_center_deg=two_mic.angle_from_center_deg,
             two_mic_confidence=two_mic.confidence,
             two_mic_peak_ratio=two_mic.peak_ratio,
+            two_mic_peak_to_second_peak=two_mic.peak_to_second_peak,
+            two_mic_lag_ambiguity_us=two_mic.lag_ambiguity_us,
             two_mic_reason=two_mic.reason,
             two_mic_look_label=two_mic.look_label,
             two_mic_look_hint=two_mic.look_hint,
@@ -1043,6 +1186,9 @@ def main():
             two_mic_direction_stable=two_mic.stable,
             possible_front_azimuth_deg=two_mic.possible_front_azimuth_deg,
             possible_back_azimuth_deg=two_mic.possible_back_azimuth_deg,
+            overflow_recent=bool(capture_stats.get("overflow_recent")),
+            overflow_timestamps=list(capture_stats.get("overflow_timestamps") or []),
+            recording_continuity_ok=recording_state_snapshot.get("recording_continuity_ok"),
             rms=frame.rms,
             peak=frame.peak,
             duration_sec=frame.duration_sec,
@@ -1107,6 +1253,8 @@ def main():
                 "two_mic_angle_from_center_deg": two_mic.angle_from_center_deg,
                 "two_mic_confidence": two_mic.confidence,
                 "two_mic_peak_ratio": two_mic.peak_ratio,
+                "two_mic_peak_to_second_peak": two_mic.peak_to_second_peak,
+                "two_mic_lag_ambiguity_us": two_mic.lag_ambiguity_us,
                 "two_mic_reason": two_mic.reason,
                 "two_mic_look_label": two_mic.look_label,
                 "two_mic_look_hint": two_mic.look_hint,
@@ -1117,6 +1265,7 @@ def main():
                 "two_mic_tracker_window_count": two_mic.tracker_window_count,
                 "possible_front_azimuth_deg": two_mic.possible_front_azimuth_deg,
                 "possible_back_azimuth_deg": two_mic.possible_back_azimuth_deg,
+                "two_mic_suppressed_reason": two_mic_suppressed_reason,
                 "two_mic_spacing_m": float(two_mic_direction_cfg.get("spacing_m", 0.5))
                 if two_mic_direction_allowed
                 else None,
@@ -1186,6 +1335,11 @@ def main():
                 "hf_label": last_hf_result.label if last_hf_result is not None else None,
                 "hf_class_probs": last_hf_result.class_probs if last_hf_result is not None else {},
                 "hf_error_message": hf_error_message,
+                "hf_async_enabled": hf_async_runner is not None,
+                "hf_run_every_sec": hf_run_every_sec,
+                "hf_max_age_sec": hf_cfg.get("max_age_sec"),
+                "hf_last_submit_unix": last_hf_submit_at,
+                "hf_last_result_unix": last_hf_at,
                 **spectrum,
                 **spectrogram,
                 "harmonic_lines": harmonic_lines,
@@ -1230,9 +1384,10 @@ def main():
             side_text += f" dt={two_mic.delay_us:.0f}us"
         if two_mic_direction_allowed:
             angle_text = "None" if two_mic.angle_from_center_deg is None else f"{two_mic.angle_from_center_deg:.0f}deg"
+            peak2_text = "None" if two_mic.peak_to_second_peak is None else f"{two_mic.peak_to_second_peak:.2f}"
             side_text += (
                 f" angle={angle_text} look={json.dumps(two_mic.look_hint or 'DIRECTION UNKNOWN - scan left and right')} "
-                f"stable={1 if two_mic.stable else 0} fb_amb={1 if two_mic.front_back_ambiguous else 0}"
+                f"stable={1 if two_mic.stable else 0} fb_amb={1 if two_mic.front_back_ambiguous else 0} peak2={peak2_text}"
             )
         print(
             f"{time.strftime('%H:%M:%S')} {event.status:11s} "
@@ -1252,7 +1407,8 @@ def main():
             f"soft={1 if frame.harmonic_soft_present else 0}/{frame.harmonic_soft_run} "
             f"mono={mono_mix_mode}:{selected_mono_channel if selected_mono_channel is not None else 'mean'} "
             f"cap_q={capture_stats.get('capture_queue_depth')} drop={capture_stats.get('detection_blocks_dropped')} "
-            f"overflow={capture_stats.get('audio_input_overflow_count')} rec_blocks={recording_state_snapshot.get('recording_blocks_written')} "
+            f"overflow={capture_stats.get('audio_input_overflow_count')} overflow_recent={1 if capture_stats.get('overflow_recent') else 0} "
+            f"rec_blocks={recording_state_snapshot.get('recording_blocks_written')} "
             f"{bearing_text} "
             f"{spatial_text} "
             f"{side_text} az={event.estimated_azimuth_deg} beam={event.beam_score}{hf_mode_note}"
@@ -1366,6 +1522,8 @@ def main():
                     "two_mic_angle_from_center_deg": two_mic.angle_from_center_deg,
                     "two_mic_confidence": two_mic.confidence,
                     "two_mic_peak_ratio": two_mic.peak_ratio,
+                    "two_mic_peak_to_second_peak": two_mic.peak_to_second_peak,
+                    "two_mic_lag_ambiguity_us": two_mic.lag_ambiguity_us,
                     "two_mic_reason": two_mic.reason,
                     "two_mic_look_label": two_mic.look_label,
                     "two_mic_look_hint": two_mic.look_hint,
@@ -1376,13 +1534,25 @@ def main():
                     "two_mic_tracker_window_count": two_mic.tracker_window_count,
                     "possible_front_azimuth_deg": two_mic.possible_front_azimuth_deg,
                     "possible_back_azimuth_deg": two_mic.possible_back_azimuth_deg,
+                    "two_mic_suppressed_reason": two_mic_suppressed_reason,
                     "audio_highpass_hz": None if audio_highpass is None else audio_highpass.cutoff_hz,
                     "audio_highpass_order": None if audio_highpass is None else audio_highpass.order,
                     "window_index": window_index,
                     "hf_error_message": hf_error_message,
+                    "hf_async_enabled": hf_async_runner is not None,
+                    "hf_run_every_sec": hf_run_every_sec,
+                    "hf_max_age_sec": hf_cfg.get("max_age_sec"),
+                    "hf_last_submit_unix": last_hf_submit_at,
+                    "hf_last_result_unix": last_hf_at,
                     "audio_input_overflow_count": capture_stats.get("audio_input_overflow_count"),
+                    "overflow_recent": capture_stats.get("overflow_recent"),
+                    "overflow_recent_count": capture_stats.get("overflow_recent_count"),
+                    "overflow_timestamps": capture_stats.get("overflow_timestamps"),
+                    "recording_continuity_ok": recording_state_snapshot.get("recording_continuity_ok"),
                     "recording_blocks_written": recording_state_snapshot.get("recording_blocks_written"),
                     "detection_blocks_dropped": capture_stats.get("detection_blocks_dropped"),
+                    "on_block_dropped": capture_stats.get("on_block_dropped"),
+                    "on_block_queue_depth": capture_stats.get("on_block_queue_depth"),
                     "capture_queue_depth": capture_stats.get("capture_queue_depth"),
                     "capture_blocks_seen": capture_stats.get("capture_blocks_seen"),
                     "capture_last_error": capture_stats.get("capture_last_error"),

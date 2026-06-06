@@ -162,7 +162,11 @@ def _render_station_card(
         action_cols[3].metric("Bearing track", event.get("bearing_track_status") or ("stable" if event.get("bearing_stable") else "n/a"))
         look_hint = event.get("two_mic_look_hint") or metadata.get("two_mic_look_hint")
         if look_hint:
-            st.caption(f"Direction hint: {look_hint}")
+            hidden_reason = metadata.get("two_mic_suppressed_reason")
+            if hidden_reason or "HIDDEN" in str(look_hint):
+                st.warning(f"Direction Hint: {look_hint}")
+            else:
+                st.info(f"Direction Hint: {look_hint}")
         if bearing_used is False:
             st.caption("Bearing unreliable" + (f": {event.get('bearing_reject_reason')}" if event.get("bearing_reject_reason") else ""))
 

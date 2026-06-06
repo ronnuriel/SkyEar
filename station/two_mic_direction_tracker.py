@@ -11,8 +11,8 @@ from station.two_mic_direction import TwoMicDirectionResult
 
 @dataclass
 class TwoMicDirectionTrackerConfig:
-    smoothing_windows: int = 5
-    min_stable_windows: int = 3
+    smoothing_windows: int = 7
+    min_stable_windows: int = 4
     max_angle_std_deg: float = 25.0
     max_side_flip_rate: float = 0.35
     min_confidence: float = 0.45
@@ -62,8 +62,8 @@ class TwoMicDirectionTracker:
 
 def two_mic_tracker_config_from_dict(config: dict[str, Any]) -> TwoMicDirectionTrackerConfig:
     return TwoMicDirectionTrackerConfig(
-        smoothing_windows=int(config.get("smoothing_windows", 5)),
-        min_stable_windows=int(config.get("min_stable_windows", 3)),
+        smoothing_windows=int(config.get("smoothing_windows", 7)),
+        min_stable_windows=int(config.get("min_stable_windows", 4)),
         max_angle_std_deg=float(config.get("max_angle_std_deg", 25.0)),
         max_side_flip_rate=float(config.get("max_side_flip_rate", 0.35)),
         min_confidence=float(config.get("min_confidence", 0.45)),
