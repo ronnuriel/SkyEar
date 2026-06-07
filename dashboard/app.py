@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 from dashboard.map_view import bearing_ray_rows, render_passive_map
 from dashboard.station_view import (
@@ -18,6 +19,12 @@ from dashboard.station_view import (
 
 
 FUSION_WINDOW_SEC = 8.0
+REFRESH_MODES = {
+    "Normal": {"interval_sec": 2.0, "live": False, "state_ttl_sec": 2.0},
+    "Live": {"interval_sec": 0.5, "live": True, "state_ttl_sec": 5.0},
+    "Debug slow": {"interval_sec": 5.0, "live": False, "state_ttl_sec": 5.0},
+    "Manual": {"interval_sec": 0.0, "live": False, "state_ttl_sec": 30.0},
+}
 
 
 def _query_param(name: str, default: str) -> str:
@@ -44,7 +51,81 @@ def _draw_health_badge(health: dict | None):
         st.error(label)
 
 
-def _render_recording_controls(station_id: str, server_url: str, event: dict) -> None:
+def _get_json(server_url: str, path: str, *, timeout: float = 2.0) -> dict:
+    return requests.get(f"{server_url}{path}", timeout=timeout).json()
+
+
+def _cached_dashboard_state(server_url: str, *, ttl_sec: float, timeout: float = 2.5) -> dict:
+    key = f"dashboard_state::{server_url}"
+    now = time.time()
+    cached = st.session_state.get(key)
+    if cached and now - float(cached.get("fetched_unix", 0.0)) <= float(ttl_sec):
+        return cached["payload"]
+    payload = _get_json(server_url, "/dashboard/state", timeout=timeout)
+    st.session_state[key] = {"fetched_unix": now, "payload": payload}
+    return payload
+
+
+def _cached_recording_state(server_url: str, station_id: str, *, ttl_sec: float = 10.0, force: bool = False) -> dict:
+    key = f"recording_state::{server_url}::{station_id}"
+    now = time.time()
+    cached = st.session_state.get(key)
+    if not force and cached and now - float(cached.get("fetched_unix", 0.0)) <= float(ttl_sec):
+        return cached["payload"]
+    payload = _get_json(server_url, f"/stations/{station_id}/recording/state", timeout=1.5)
+    st.session_state[key] = {"fetched_unix": now, "payload": payload}
+    return payload
+
+
+def _is_simulation_station(event: dict | None, health: dict | None = None) -> bool:
+    event = event or {}
+    health = health or {}
+    heartbeat = health.get("heartbeat") or {}
+    latest_event = health.get("latest_event") or event
+    metadata = {
+        **((heartbeat.get("metadata") or {}) if isinstance(heartbeat, dict) else {}),
+        **((latest_event.get("metadata") or {}) if isinstance(latest_event, dict) else {}),
+        **(event.get("metadata") or {}),
+    }
+    return (
+        str(event.get("station_mode") or latest_event.get("station_mode") or heartbeat.get("station_mode") or "") == "simulation"
+        or str(metadata.get("source") or "").startswith("simulate_")
+        or bool(metadata.get("scenario_id") in {"fiber_grid", "multi_target", "two_near_one_far"})
+    )
+
+
+def _schedule_autorefresh(enabled: bool, interval_sec: float, *, key: str = "dashboard_autorefresh") -> None:
+    if not enabled or float(interval_sec) <= 0.0:
+        return
+    interval_ms = max(250, int(float(interval_sec) * 1000))
+    try:
+        from streamlit_autorefresh import st_autorefresh
+
+        st_autorefresh(interval=interval_ms, key=key)
+    except Exception:
+        components.html(
+            f"""
+            <script>
+            setTimeout(function() {{
+                window.parent.location.reload();
+            }}, {interval_ms});
+            </script>
+            """,
+            height=0,
+        )
+
+
+def _render_recording_controls(
+    station_id: str,
+    server_url: str,
+    event: dict,
+    *,
+    simulation_station: bool = False,
+    poll_ttl_sec: float = 10.0,
+) -> None:
+    if simulation_station:
+        st.caption("Recording controls hidden for simulation station.")
+        return
     labels = [
         "background",
         "drone_off",
@@ -58,19 +139,25 @@ def _render_recording_controls(station_id: str, server_url: str, event: dict) ->
         "fan",
         "unknown_noise",
     ]
-    st.warning("Recording may capture voices. Use only where permitted.")
-    try:
-        rec = requests.get(f"{server_url}/stations/{station_id}/recording/state", timeout=1.5).json()
-    except Exception:
-        rec = {"state": {}, "pending_commands": []}
-    state = rec.get("state") or {}
-    cols = st.columns(3)
-    cols[0].metric("Recording", "ON" if state.get("recording") else "OFF")
-    cols[1].metric("Duration", f"{float(state.get('duration_sec') or 0.0):.0f}s")
-    cols[2].metric("Folder", state.get("session_dir") or "n/a")
-    if rec.get("pending_commands"):
-        st.caption(f"Pending recording command(s): {len(rec['pending_commands'])}")
     with st.expander("Recording controls"):
+        st.warning("Recording may capture voices. Use only where permitted.")
+        try:
+            rec = _cached_recording_state(server_url, station_id, ttl_sec=poll_ttl_sec)
+        except Exception:
+            rec = {"state": {}, "pending_commands": []}
+        state = rec.get("state") or {}
+        cols = st.columns(3)
+        cols[0].metric("Recording", "ON" if state.get("recording") else "OFF")
+        cols[1].metric("Duration", f"{float(state.get('duration_sec') or 0.0):.0f}s")
+        cols[2].metric("Folder", state.get("session_dir") or "n/a")
+        if rec.get("pending_commands"):
+            st.caption(f"Pending recording command(s): {len(rec['pending_commands'])}")
+        if st.button("Refresh recording state", key=f"rec_refresh_{station_id}"):
+            try:
+                _cached_recording_state(server_url, station_id, ttl_sec=poll_ttl_sec, force=True)
+            except Exception:
+                pass
+            st.rerun()
         session_name = st.text_input("Session name", value="", key=f"rec_session_{station_id}")
         label = st.selectbox("Marker label", labels, key=f"rec_label_{station_id}")
         note = st.text_input("Note", value="", key=f"rec_note_{station_id}")
@@ -108,6 +195,8 @@ def _render_station_card(
     fusion_level: int,
     show_inline_mini_spectrum: bool,
     server_url: str,
+    *,
+    live_mode: bool = False,
 ):
     metadata = event.get("metadata") or {}
     station_id = event.get("station_id") or station_id
@@ -170,7 +259,13 @@ def _render_station_card(
         if bearing_used is False:
             st.caption("Bearing unreliable" + (f": {event.get('bearing_reject_reason')}" if event.get("bearing_reject_reason") else ""))
 
-        _render_recording_controls(station_id, server_url, event)
+        _render_recording_controls(
+            station_id,
+            server_url,
+            event,
+            simulation_station=_is_simulation_station(event, health),
+            poll_ttl_sec=10.0 if live_mode else 5.0,
+        )
 
         detail_cols = st.columns(4)
         agreement = event.get("channel_agreement_count")
@@ -255,28 +350,56 @@ st.title("SkyEar Operator Dashboard")
 st.caption("Passive acoustic warning network - tactical overview.")
 
 server_url = st.sidebar.text_input("Server URL", value=_query_param("server_url", "http://127.0.0.1:8080"))
-st.sidebar.button("Refresh")
-auto_refresh = st.sidebar.checkbox("Auto refresh", value=True)
-refresh_sec = st.sidebar.number_input(
-    "Refresh every seconds",
-    min_value=0.5,
-    max_value=10.0,
-    value=2.0,
-    step=0.5,
-)
+refresh_mode = st.sidebar.selectbox("Refresh mode", list(REFRESH_MODES), index=0)
+refresh_cfg = REFRESH_MODES[refresh_mode]
+live_mode = bool(refresh_cfg["live"])
+manual_refresh = st.sidebar.button("Refresh")
+if manual_refresh:
+    for cache_key in list(st.session_state):
+        if str(cache_key).startswith(("dashboard_state::", "recording_state::")):
+            del st.session_state[cache_key]
 show_inline_mini_spectrum = st.sidebar.checkbox("Show inline mini spectrum", value=False)
-show_bearing_sectors = st.sidebar.checkbox("Show bearing sectors", value=True)
+show_bearing_sectors = st.sidebar.checkbox("Show bearing sectors", value=not live_mode)
 show_global_uncertainty = st.sidebar.checkbox("Show global uncertainty estimate", value=False)
 show_track_estimates = st.sidebar.checkbox("Show track estimates", value=True)
 show_station_coverage = st.sidebar.checkbox("Show station coverage", value=False)
+show_full_station_cards = st.sidebar.checkbox("Show full station cards", value=not live_mode)
 max_stations_per_row = int(
     st.sidebar.number_input("Max stations per row", min_value=1, max_value=4, value=3, step=1)
 )
 
+dashboard_state: dict = {}
+live_state: dict = {}
+data_error: Exception | None = None
 try:
-    st.sidebar.success(requests.get(f"{server_url}/health", timeout=1.5).json())
+    if live_mode:
+        live_state = _get_json(server_url, "/dashboard/live", timeout=1.2)
+        try:
+            dashboard_state = _cached_dashboard_state(
+                server_url,
+                ttl_sec=float(refresh_cfg["state_ttl_sec"]),
+                timeout=2.5,
+            )
+        except Exception:
+            dashboard_state = {}
+    else:
+        dashboard_state = _cached_dashboard_state(
+            server_url,
+            ttl_sec=0.0 if manual_refresh else float(refresh_cfg["state_ttl_sec"]),
+            timeout=2.5,
+        )
+    health_payload = dashboard_state.get("health") or {"ok": bool(live_state)}
+    st.sidebar.success(health_payload)
 except Exception as e:
+    data_error = e
     st.sidebar.error(f"Server unavailable: {e}")
+
+fusion = (live_state.get("fusion") if live_mode else dashboard_state.get("fusion")) or {}
+map_state = (live_state.get("map_state") if live_mode else dashboard_state.get("map_state")) or {}
+latest_by_station = dashboard_state.get("stations_latest") or {}
+health_by_station = dashboard_state.get("stations_health") or {}
+alerts = dashboard_state.get("alerts") or []
+station_health_summary = live_state.get("stations_health_summary") or []
 
 fusion_panel = st.container()
 map_panel = st.container()
@@ -288,7 +411,6 @@ with fusion_panel:
     st.subheader("Fusion")
     col1, col2, col3 = st.columns(3)
     try:
-        fusion = requests.get(f"{server_url}/fusion", timeout=2).json()
         fusion_level = int(fusion.get("level", 0))
         confidence = float(fusion.get("confidence", 0.0))
         reason = fusion.get("reason", "")
@@ -325,7 +447,6 @@ with fusion_panel:
 with map_panel:
     st.subheader("Map / Passive Acoustic Situation")
     try:
-        map_state = requests.get(f"{server_url}/map/state", timeout=2).json()
         render_passive_map(
             st,
             map_state,
@@ -340,52 +461,61 @@ with map_panel:
 with stations_panel:
     st.subheader("Stations")
     try:
-        latest_by_station = requests.get(f"{server_url}/stations/latest", timeout=2).json()
-        health_by_station = requests.get(f"{server_url}/stations/health", timeout=2).json()
+        if live_mode and not show_full_station_cards:
+            if station_health_summary:
+                st.dataframe(pd.DataFrame(station_health_summary), width="stretch")
+            else:
+                st.info("Station summary will refresh on the slower dashboard state cache.")
+            st.caption("Live mode keeps station cards collapsed for speed. Enable full station cards in the sidebar when needed.")
+        else:
+            if live_mode:
+                st.caption("Station cards use a slower cache in Live mode to keep map/fusion responsive.")
         station_events = sorted(latest_by_station.items())
         heartbeat_only = sorted(
             (station_id, health)
             for station_id, health in health_by_station.items()
             if station_id not in latest_by_station
         )
-        if not station_events:
+        if not station_events and not (live_mode and not show_full_station_cards):
             st.info("No station events yet.")
 
-        for start in range(0, len(station_events), max_stations_per_row):
-            row_events = station_events[start : start + max_stations_per_row]
-            columns = st.columns(len(row_events))
-            for column, (station_id, event) in zip(columns, row_events):
-                with column:
-                    _render_station_card(
-                        station_id,
-                        event,
-                        health_by_station.get(station_id),
-                        fusion_level,
-                        show_inline_mini_spectrum,
-                        server_url,
-                    )
-        st.subheader("Online stations without recent events")
-        if heartbeat_only:
-            for start in range(0, len(heartbeat_only), max_stations_per_row):
-                row_items = heartbeat_only[start : start + max_stations_per_row]
-                columns = st.columns(len(row_items))
-                for column, (station_id, health) in zip(columns, row_items):
+        if not (live_mode and not show_full_station_cards):
+            for start in range(0, len(station_events), max_stations_per_row):
+                row_events = station_events[start : start + max_stations_per_row]
+                columns = st.columns(len(row_events))
+                for column, (station_id, event) in zip(columns, row_events):
                     with column:
-                        with st.container(border=True):
-                            st.markdown(f"### {station_id}")
-                            _draw_health_badge(health)
-                            timing = timing_summary(None, health)
-                            st.metric("Last heartbeat", timing["heartbeat_age"])
-                            st.metric("Latency", timing["latency"])
-                            st.caption("Station is online/background; no acoustic event received yet.")
-        else:
-            st.info("No heartbeat-only stations.")
-        bearing_rows = bearing_ray_rows([event for _, event in station_events])
-        st.subheader("Map bearing cues")
-        if bearing_rows:
-            st.dataframe(pd.DataFrame(bearing_rows), width="stretch")
-        else:
-            st.info("No bearing cues yet.")
+                        _render_station_card(
+                            station_id,
+                            event,
+                            health_by_station.get(station_id),
+                            fusion_level,
+                            show_inline_mini_spectrum,
+                            server_url,
+                            live_mode=live_mode,
+                        )
+            st.subheader("Online stations without recent events")
+            if heartbeat_only:
+                for start in range(0, len(heartbeat_only), max_stations_per_row):
+                    row_items = heartbeat_only[start : start + max_stations_per_row]
+                    columns = st.columns(len(row_items))
+                    for column, (station_id, health) in zip(columns, row_items):
+                        with column:
+                            with st.container(border=True):
+                                st.markdown(f"### {station_id}")
+                                _draw_health_badge(health)
+                                timing = timing_summary(None, health)
+                                st.metric("Last heartbeat", timing["heartbeat_age"])
+                                st.metric("Latency", timing["latency"])
+                                st.caption("Station is online/background; no acoustic event received yet.")
+            else:
+                st.info("No heartbeat-only stations.")
+            bearing_rows = bearing_ray_rows([event for _, event in station_events])
+            st.subheader("Map bearing cues")
+            if bearing_rows:
+                st.dataframe(pd.DataFrame(bearing_rows), width="stretch")
+            else:
+                st.info("No bearing cues yet.")
     except Exception as e:
         st.error(f"Could not load stations: {e}")
 
@@ -394,7 +524,6 @@ with stations_panel:
 with alerts_panel:
     st.subheader("Recent alerts")
     try:
-        alerts = requests.get(f"{server_url}/alerts?limit=50", timeout=2).json()
         if alerts:
             st.dataframe(pd.DataFrame(alerts).iloc[::-1], width="stretch")
         else:
@@ -402,6 +531,9 @@ with alerts_panel:
     except Exception as e:
         st.error(f"Could not load alerts: {e}")
 
-if auto_refresh:
-    time.sleep(float(refresh_sec))
-    st.rerun()
+if data_error is None:
+    _schedule_autorefresh(
+        refresh_mode != "Manual",
+        float(refresh_cfg["interval_sec"]),
+        key=f"dashboard_autorefresh_{refresh_mode}",
+    )

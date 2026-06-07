@@ -120,12 +120,97 @@ def get_fusion():
 def get_map_state():
     return map_state_from_db(db)
 
-@app.get("/stations/latest")
-def get_latest_by_station():
+
+def _latest_by_station_json() -> dict:
     return {
         station_id: event.model_dump(mode="json")
         for station_id, event in db.latest_by_station().items()
     }
+
+
+def _station_health_summary(stations_health: dict) -> list[dict]:
+    rows = []
+    for station_id, health in sorted(stations_health.items()):
+        heartbeat = health.get("heartbeat") or {}
+        event = health.get("latest_event") or {}
+        metadata = (event.get("metadata") or {}) or (heartbeat.get("metadata") or {})
+        rows.append(
+            {
+                "station_id": station_id,
+                "station_name": health.get("station_name"),
+                "alive_state": health.get("alive_state"),
+                "health": "degraded" if health.get("alive_state") == "error" else health.get("alive_state"),
+                "last_status": health.get("last_event_status"),
+                "heartbeat_age_sec": health.get("heartbeat_age_sec"),
+                "event_age_sec": health.get("event_age_sec"),
+                "latency_sec": health.get("latency_sec"),
+                "latitude": metadata.get("latitude") or (event.get("station_location") or {}).get("latitude"),
+                "longitude": metadata.get("longitude") or (event.get("station_location") or {}).get("longitude"),
+                "line_id": metadata.get("line_id"),
+                "line_distance_m": metadata.get("line_distance_m"),
+                "fiber_node_id": metadata.get("fiber_node_id"),
+                "fiber_connected": metadata.get("fiber_connected"),
+                "station_mode": event.get("station_mode") or heartbeat.get("station_mode"),
+                "simulation": (
+                    str(metadata.get("source") or "").startswith("simulate_")
+                    or str(event.get("station_mode") or heartbeat.get("station_mode") or "") == "simulation"
+                ),
+            }
+        )
+    return rows
+
+
+@app.get("/dashboard/state")
+def get_dashboard_state(alert_limit: int = 50):
+    now = time.time()
+    events = db.recent_events(limit=200)
+    fusion = fuse_events(events)
+    stations_health = db.station_health(now=now)
+    return {
+        "server_time": now,
+        "health": health(),
+        "fusion": fusion.model_dump(mode="json"),
+        "map_state": map_state_from_db(db, now=now),
+        "stations_latest": _latest_by_station_json(),
+        "stations_health": stations_health,
+        "alerts": [a.model_dump(mode="json") for a in db.recent_alerts(limit=alert_limit)],
+    }
+
+
+@app.get("/dashboard/live")
+def get_dashboard_live():
+    now = time.time()
+    events = db.recent_events(limit=200)
+    fusion = fuse_events(events).model_dump(mode="json")
+    map_state = map_state_from_db(db, now=now)
+    stations_health = db.station_health(now=now)
+    return {
+        "server_time": now,
+        "fusion": {
+            "timestamp_unix": fusion.get("timestamp_unix"),
+            "level": fusion.get("level"),
+            "global_level": fusion.get("global_level"),
+            "status": fusion.get("status"),
+            "confidence": fusion.get("confidence"),
+            "interpretation": fusion.get("interpretation"),
+            "reason": fusion.get("reason"),
+            "tracks": fusion.get("tracks") or [],
+        },
+        "map_state": {
+            "server_time": map_state.get("server_time"),
+            "stations": map_state.get("stations") or [],
+            "tracks": map_state.get("tracks") or [],
+            "track_geo_estimates": map_state.get("track_geo_estimates") or [],
+            "geo_estimate_suppressed_reason": map_state.get("geo_estimate_suppressed_reason"),
+            "geo_estimates": [],
+            "bearing_cues": [],
+        },
+        "stations_health_summary": _station_health_summary(stations_health),
+    }
+
+@app.get("/stations/latest")
+def get_latest_by_station():
+    return _latest_by_station_json()
 
 @app.get("/stations/summary")
 def get_station_summary():

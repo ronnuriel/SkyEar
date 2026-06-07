@@ -14,7 +14,7 @@ Developer shortcuts:
 skyear dev debug-wav runtime/recordings/<session_id>/chunk_0000.wav
 skyear dev benchmark --dataset svanstrom --window-sec 1.0 --hf --output-dir reports/benchmark_run
 skyear dev simulate
-skyear dev simulate fiber-grid --targets 2 --assert-tracks
+skyear dev simulate fiber-grid --targets 2 --post-realtime --step-sec 0.5 --assert-tracks
 ```
 
 Legacy scripts remain available for compatibility, including:
@@ -37,11 +37,15 @@ skyear dashboard
 skyear-simulate-fiber-grid \
   --server http://127.0.0.1:8080/events \
   --targets 2 \
+  --post-realtime \
+  --step-sec 0.5 \
   --station-failure A4,B2 \
   --assert-tracks
 ```
 
 The simulator posts synthetic `AcousticEvent` and `StationHeartbeat` JSON only. It does not require real audio. The default layout has three passive lines: A at 800m, B at 600m, and C at 400m from the control point.
+
+Use `--post-realtime --step-sec 0.5` when you want to watch movement live in the dashboard. Without `--post-realtime`, the simulator posts all steps quickly and the dashboard will mostly show the final state.
 
 Run normal checks:
 

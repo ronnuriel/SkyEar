@@ -19,6 +19,10 @@ Main station endpoints:
 - `POST /events`
 - `POST /stations/heartbeat`
 - `GET /fusion`
+- `GET /dashboard/state`
+- `GET /dashboard/live`
+
+The operator dashboard uses `/dashboard/state` in normal mode and the smaller `/dashboard/live` endpoint in live mode to reduce request volume during simulations.
 
 Station config usually points at:
 

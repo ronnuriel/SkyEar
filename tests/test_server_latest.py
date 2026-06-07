@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+import time
+
 from shared.event_schema import AcousticEvent, StationHeartbeat
-from server.api import get_latest_by_station, get_station_health, get_station_summary, ingest_event, ingest_heartbeat
+from server.api import (
+    get_dashboard_live,
+    get_dashboard_state,
+    get_latest_by_station,
+    get_station_health,
+    get_station_summary,
+    ingest_event,
+    ingest_heartbeat,
+)
 from server.database import db
 
 
@@ -89,3 +99,30 @@ def test_station_health_reports_online_stale_and_offline_by_heartbeat_age():
     assert health["stale"]["alive_state"] == "stale"
     assert health["offline"]["alive_state"] == "offline"
     assert health["missing_heartbeat"]["alive_state"] == "offline"
+
+
+def test_dashboard_state_combines_common_dashboard_payloads():
+    ingest_event(_event("station_1", time.time(), harmonic_score=18.0))
+    ingest_heartbeat(StationHeartbeat(station_id="station_1", timestamp_unix=time.time()))
+
+    state = get_dashboard_state()
+
+    assert state["health"]["ok"] is True
+    assert "fusion" in state
+    assert "map_state" in state
+    assert "station_1" in state["stations_latest"]
+    assert "station_1" in state["stations_health"]
+    assert isinstance(state["alerts"], list)
+
+
+def test_dashboard_live_returns_compact_tactical_payload():
+    ingest_event(_event("station_1", time.time(), harmonic_score=18.0))
+    ingest_heartbeat(StationHeartbeat(station_id="station_1", timestamp_unix=time.time()))
+
+    live = get_dashboard_live()
+
+    assert set(live) == {"server_time", "fusion", "map_state", "stations_health_summary"}
+    assert "tracks" in live["fusion"]
+    assert "track_geo_estimates" in live["map_state"]
+    assert "stations_latest" not in live
+    assert live["stations_health_summary"][0]["station_id"] == "station_1"
