@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_with_argv("skyear-server", argv, _server_main)
     if command == "dashboard":
         return _run_dashboard(argv)
+    if command == "live":
+        return _run_live(config_path, argv)
     if command == "monitor":
         return _run_monitor(config_path, argv)
     if command == "rec":
@@ -123,6 +125,12 @@ def _run_dashboard(argv: list[str]) -> int:
     except SystemExit as exc:
         return int(exc.code or 0)
     return 0
+
+
+def _run_live(config_path: str, argv: list[str]) -> int:
+    from tools.open_live import main as live_main
+
+    return live_main(["--config", config_path, *argv])
 
 
 def _run_monitor(config_path: str, argv: list[str]) -> int:
@@ -381,6 +389,7 @@ SkyEar command groups:
   skyear station                 Run station from active config
   skyear server                  Run central API server
   skyear dashboard               Run central dashboard
+  skyear live                    Open live tactical map
   skyear monitor                 Run local station monitor
   skyear rec start <session>     Start local station recording
   skyear rec mark <label>        Add recording marker

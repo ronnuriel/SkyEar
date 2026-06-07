@@ -6,6 +6,7 @@ The operator flow uses:
 skyear server
 skyear station
 skyear dashboard
+skyear live
 ```
 
 Developer shortcuts:
@@ -33,7 +34,7 @@ Fiber-grid deployment simulation:
 
 ```bash
 skyear server
-skyear dashboard
+skyear live
 skyear-simulate-fiber-grid \
   --server http://127.0.0.1:8080/events \
   --targets 2 \
@@ -45,7 +46,7 @@ skyear-simulate-fiber-grid \
 
 The simulator posts synthetic `AcousticEvent` and `StationHeartbeat` JSON only. It does not require real audio. The default layout has three passive lines: A at 800m, B at 600m, and C at 400m from the control point.
 
-Use `--post-realtime --step-sec 0.5` when you want to watch movement live in the dashboard. Without `--post-realtime`, the simulator posts all steps quickly and the dashboard will mostly show the final state.
+Use `--post-realtime --step-sec 0.5` when you want to watch movement live. The `/live` tactical map updates in-place without a Streamlit rerun. Without `--post-realtime`, the simulator posts all steps quickly and the live map will mostly show the final state.
 
 Run normal checks:
 

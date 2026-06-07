@@ -1,6 +1,10 @@
 from __future__ import annotations
 import time
+from pathlib import Path
+
 from fastapi import Depends, FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from shared.event_schema import AcousticEvent, FusedAlert, StationHeartbeat
 from server.auth import require_station_auth
@@ -10,7 +14,10 @@ from server.geo_fusion import map_state_from_db
 from server.ptz_dispatcher import dispatch_ptz_for_alert
 from server.recording_commands import pending_recording_commands, pop_recording_command, queue_recording_command
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
 app = FastAPI(title="Drone Acoustic Network API")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class RecordingCommandBody(BaseModel):
@@ -178,7 +185,7 @@ def get_dashboard_state(alert_limit: int = 50):
 
 
 @app.get("/dashboard/live")
-def get_dashboard_live():
+def get_dashboard_live(bearing_cues: bool = False):
     now = time.time()
     events = db.recent_events(limit=200)
     fusion = fuse_events(events).model_dump(mode="json")
@@ -203,10 +210,15 @@ def get_dashboard_live():
             "track_geo_estimates": map_state.get("track_geo_estimates") or [],
             "geo_estimate_suppressed_reason": map_state.get("geo_estimate_suppressed_reason"),
             "geo_estimates": [],
-            "bearing_cues": [],
+            "bearing_cues": (map_state.get("bearing_cues") or []) if bearing_cues else [],
         },
         "stations_health_summary": _station_health_summary(stations_health),
     }
+
+
+@app.get("/live")
+def get_live_page():
+    return FileResponse(STATIC_DIR / "live.html")
 
 @app.get("/stations/latest")
 def get_latest_by_station():

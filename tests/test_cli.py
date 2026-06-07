@@ -113,6 +113,16 @@ def test_cli_check_audio_dry_run_resolves_device(monkeypatch, tmp_path: Path, ca
     assert "actual_max_input_channels: 2" in output
 
 
+def test_cli_live_print_only_uses_config_server_url(tmp_path: Path, capsys):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("server:\n  url: http://server:8080/events\n", encoding="utf-8")
+
+    assert main(["--config", str(config_path), "live", "--print-only"]) == 0
+
+    output = capsys.readouterr().out
+    assert "http://server:8080/live" in output
+
+
 def test_release_tag_version_parser():
     assert _version_from_tag("v0.2.0-field-alpha") == "0.2.0"
     assert _version_from_tag("0.2.1") == "0.2.1"

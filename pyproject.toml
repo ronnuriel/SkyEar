@@ -53,6 +53,7 @@ skyear = "tools.cli:main"
 skyear-station = "station.station_agent:main"
 skyear-server = "server.cli:main"
 skyear-dashboard = "dashboard.cli:main_dashboard"
+skyear-live = "tools.open_live:main"
 skyear-local-monitor = "dashboard.cli:main_local_monitor"
 skyear-copy-configs = "tools.copy_configs:main"
 skyear-check-server = "tools.check_server:main"
@@ -99,3 +100,4 @@ include = ["station*", "server*", "shared*", "dashboard*", "tools*", "configs*",
 [tool.setuptools.package-data]
 configs = ["*.yaml", "*.json"]
 data = ["dataset_registry.yaml", "README.md"]
+server = ["static/*"]

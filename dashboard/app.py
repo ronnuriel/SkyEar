@@ -115,6 +115,13 @@ def _schedule_autorefresh(enabled: bool, interval_sec: float, *, key: str = "das
         )
 
 
+def _live_url(server_url: str) -> str:
+    url = str(server_url or "http://127.0.0.1:8080").rstrip("/")
+    if url.endswith("/events"):
+        url = url[: -len("/events")]
+    return url + "/live"
+
+
 def _render_recording_controls(
     station_id: str,
     server_url: str,
@@ -350,9 +357,14 @@ st.title("SkyEar Operator Dashboard")
 st.caption("Passive acoustic warning network - tactical overview.")
 
 server_url = st.sidebar.text_input("Server URL", value=_query_param("server_url", "http://127.0.0.1:8080"))
-refresh_mode = st.sidebar.selectbox("Refresh mode", list(REFRESH_MODES), index=0)
+live_tactical_url = _live_url(server_url)
+st.sidebar.link_button("Open Live Tactical Map", live_tactical_url)
+st.sidebar.caption(live_tactical_url)
+refresh_mode = st.sidebar.selectbox("Refresh mode", list(REFRESH_MODES), index=list(REFRESH_MODES).index("Manual"))
 refresh_cfg = REFRESH_MODES[refresh_mode]
 live_mode = bool(refresh_cfg["live"])
+if live_mode:
+    st.sidebar.info("For smooth tactical map updates use the /live page. Streamlit still reruns the dashboard script.")
 manual_refresh = st.sidebar.button("Refresh")
 if manual_refresh:
     for cache_key in list(st.session_state):

@@ -21,8 +21,9 @@ Main station endpoints:
 - `GET /fusion`
 - `GET /dashboard/state`
 - `GET /dashboard/live`
+- `GET /live`
 
-The operator dashboard uses `/dashboard/state` in normal mode and the smaller `/dashboard/live` endpoint in live mode to reduce request volume during simulations.
+The detailed Streamlit dashboard uses `/dashboard/state` in normal mode and the smaller `/dashboard/live` endpoint in live mode. The smooth tactical map is served at `/live`; it polls `/dashboard/live` and updates the page in-place without full reloads.
 
 Station config usually points at:
 
