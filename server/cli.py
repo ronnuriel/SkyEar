@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the SkyEar central API server.")
+    parser.add_argument("--config", default=os.environ.get("SKYEAR_CONFIG", "configs/config_station.yaml"))
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
+    os.environ["SKYEAR_CONFIG"] = str(args.config)
 
     import uvicorn
 

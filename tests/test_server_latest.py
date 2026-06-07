@@ -121,8 +121,26 @@ def test_dashboard_live_returns_compact_tactical_payload():
 
     live = get_dashboard_live()
 
-    assert set(live) == {"server_time", "fusion", "map_state", "stations_health_summary"}
+    assert {
+        "server_time",
+        "fusion",
+        "map_state",
+        "stations_health_summary",
+        "tracks",
+        "track_count",
+        "nearest_eta_sec",
+        "nearest_track_id",
+        "latest_line_crossed",
+        "online_station_count",
+        "total_station_count",
+        "degraded_station_count",
+        "offline_station_count",
+        "source_ids",
+    } <= set(live)
     assert "tracks" in live["fusion"]
+    assert live["fusion"]["track_count"] == live["track_count"]
     assert "track_geo_estimates" in live["map_state"]
     assert "stations_latest" not in live
+    assert "alerts" not in live
     assert live["stations_health_summary"][0]["station_id"] == "station_1"
+    assert live["total_station_count"] == 1

@@ -5,8 +5,8 @@ The operator flow uses:
 ```bash
 skyear server
 skyear station
-skyear dashboard
-skyear live
+skyear dashboard  # manual snapshot/admin/debug
+skyear live       # smooth tactical map
 ```
 
 Developer shortcuts:
@@ -47,6 +47,35 @@ skyear-simulate-fiber-grid \
 The simulator posts synthetic `AcousticEvent` and `StationHeartbeat` JSON only. It does not require real audio. The default layout has three passive lines: A at 800m, B at 600m, and C at 400m from the control point.
 
 Use `--post-realtime --step-sec 0.5` when you want to watch movement live. The `/live` tactical map updates in-place without a Streamlit rerun. Without `--post-realtime`, the simulator posts all steps quickly and the live map will mostly show the final state.
+
+The `/live` page is the tactical screen: it shows fusion level, station counts, nearest ETA, latest crossed line, track list, station line overlays, optional bearing sectors, optional track estimates, optional station coverage, and pause/follow controls.
+
+Use schematic mode for offline work:
+
+```text
+http://127.0.0.1:8080/live?mode=schematic
+```
+
+Use geo mode when `live_map.tile_url` is configured, or when online tiles are explicitly allowed:
+
+```text
+http://127.0.0.1:8080/live?mode=geo&lat=<LAT>&lon=<LON>&zoom=13
+```
+
+Place a simulation around an operator-chosen control point:
+
+```bash
+skyear-simulate-fiber-grid \
+  --control-lat <LAT> \
+  --control-lon <LON> \
+  --target-heading-deg 180 \
+  --targets 2 \
+  --post-realtime \
+  --step-sec 0.5 \
+  --assert-tracks
+```
+
+`skyear dashboard` is intentionally a manual Streamlit snapshot view. Use **Refresh snapshot** when you want a new admin/debug snapshot. For continuous track movement, ETA, line crossing, and map monitoring, use `skyear live` or open `http://127.0.0.1:8080/live`.
 
 Run normal checks:
 

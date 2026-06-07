@@ -22,8 +22,9 @@ Main station endpoints:
 - `GET /dashboard/state`
 - `GET /dashboard/live`
 - `GET /live`
+- `GET /live/config`
 
-The detailed Streamlit dashboard uses `/dashboard/state` in normal mode and the smaller `/dashboard/live` endpoint in live mode. The smooth tactical map is served at `/live`; it polls `/dashboard/live` and updates the page in-place without full reloads.
+The detailed Streamlit dashboard is a manual snapshot/admin/debug view. It uses `/dashboard/state` for one-shot snapshots and does not try to be the live map. The smooth tactical map is served at `/live`; it polls `/dashboard/live` and updates the page in-place without full reloads. Geo basemap settings come from `/live/config`; by default SkyEar stays in offline schematic mode unless a local tile URL is configured or online tiles are explicitly allowed.
 
 Station config usually points at:
 

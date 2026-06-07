@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     if command == "station":
         return _run_station(config_path, argv)
     if command == "server":
-        return _run_with_argv("skyear-server", argv, _server_main)
+        return _run_with_argv("skyear-server", _ensure_config_arg(argv, config_path), _server_main)
     if command == "dashboard":
         return _run_dashboard(argv)
     if command == "live":

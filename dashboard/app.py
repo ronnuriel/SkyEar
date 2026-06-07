@@ -1,3 +1,4 @@
+from datetime import datetime
 import time
 
 import matplotlib.pyplot as plt
@@ -7,6 +8,17 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from dashboard.map_view import bearing_ray_rows, render_passive_map
+from dashboard.snapshot_state import (
+    DEBUG_REFRESH_INTERVALS_SEC,
+    DEFAULT_REFRESH_MODE,
+    compact_station_rows,
+    get_dashboard_snapshot,
+    is_simulation_station,
+    should_fetch_dashboard_snapshot,
+    should_poll_recording_state,
+    snapshot_age_sec,
+    store_dashboard_snapshot,
+)
 from dashboard.station_view import (
     health_badge_label,
     is_event_stale_for_fusion,
@@ -19,12 +31,6 @@ from dashboard.station_view import (
 
 
 FUSION_WINDOW_SEC = 8.0
-REFRESH_MODES = {
-    "Normal": {"interval_sec": 2.0, "live": False, "state_ttl_sec": 2.0},
-    "Live": {"interval_sec": 0.5, "live": True, "state_ttl_sec": 5.0},
-    "Debug slow": {"interval_sec": 5.0, "live": False, "state_ttl_sec": 5.0},
-    "Manual": {"interval_sec": 0.0, "live": False, "state_ttl_sec": 30.0},
-}
 
 
 def _query_param(name: str, default: str) -> str:
@@ -55,17 +61,6 @@ def _get_json(server_url: str, path: str, *, timeout: float = 2.0) -> dict:
     return requests.get(f"{server_url}{path}", timeout=timeout).json()
 
 
-def _cached_dashboard_state(server_url: str, *, ttl_sec: float, timeout: float = 2.5) -> dict:
-    key = f"dashboard_state::{server_url}"
-    now = time.time()
-    cached = st.session_state.get(key)
-    if cached and now - float(cached.get("fetched_unix", 0.0)) <= float(ttl_sec):
-        return cached["payload"]
-    payload = _get_json(server_url, "/dashboard/state", timeout=timeout)
-    st.session_state[key] = {"fetched_unix": now, "payload": payload}
-    return payload
-
-
 def _cached_recording_state(server_url: str, station_id: str, *, ttl_sec: float = 10.0, force: bool = False) -> dict:
     key = f"recording_state::{server_url}::{station_id}"
     now = time.time()
@@ -75,23 +70,6 @@ def _cached_recording_state(server_url: str, station_id: str, *, ttl_sec: float 
     payload = _get_json(server_url, f"/stations/{station_id}/recording/state", timeout=1.5)
     st.session_state[key] = {"fetched_unix": now, "payload": payload}
     return payload
-
-
-def _is_simulation_station(event: dict | None, health: dict | None = None) -> bool:
-    event = event or {}
-    health = health or {}
-    heartbeat = health.get("heartbeat") or {}
-    latest_event = health.get("latest_event") or event
-    metadata = {
-        **((heartbeat.get("metadata") or {}) if isinstance(heartbeat, dict) else {}),
-        **((latest_event.get("metadata") or {}) if isinstance(latest_event, dict) else {}),
-        **(event.get("metadata") or {}),
-    }
-    return (
-        str(event.get("station_mode") or latest_event.get("station_mode") or heartbeat.get("station_mode") or "") == "simulation"
-        or str(metadata.get("source") or "").startswith("simulate_")
-        or bool(metadata.get("scenario_id") in {"fiber_grid", "multi_target", "two_near_one_far"})
-    )
 
 
 def _schedule_autorefresh(enabled: bool, interval_sec: float, *, key: str = "dashboard_autorefresh") -> None:
@@ -133,6 +111,13 @@ def _render_recording_controls(
     if simulation_station:
         st.caption("Recording controls hidden for simulation station.")
         return
+    controls_enabled = st.checkbox("Recording controls", value=False, key=f"rec_controls_enabled_{station_id}")
+    if not controls_enabled:
+        st.caption("Recording controls are loaded only when enabled.")
+        return
+    if not should_poll_recording_state(event, None, controls_enabled=controls_enabled):
+        st.caption("Recording controls hidden for simulation station.")
+        return
     labels = [
         "background",
         "drone_off",
@@ -146,7 +131,7 @@ def _render_recording_controls(
         "fan",
         "unknown_noise",
     ]
-    with st.expander("Recording controls"):
+    with st.expander("Recording controls", expanded=True):
         st.warning("Recording may capture voices. Use only where permitted.")
         try:
             rec = _cached_recording_state(server_url, station_id, ttl_sec=poll_ttl_sec)
@@ -203,7 +188,7 @@ def _render_station_card(
     show_inline_mini_spectrum: bool,
     server_url: str,
     *,
-    live_mode: bool = False,
+    snapshot_time: float | None = None,
 ):
     metadata = event.get("metadata") or {}
     station_id = event.get("station_id") or station_id
@@ -219,7 +204,7 @@ def _render_station_card(
         if station_name:
             header_cols[0].caption(station_name)
         _draw_status(status)
-        timing = timing_summary(event, health)
+        timing = timing_summary(event, health, now=snapshot_time)
         timing_cols = st.columns(4)
         timing_cols[0].metric("Last heartbeat", timing["heartbeat_age"])
         timing_cols[1].metric("Last event", timing["event_age"])
@@ -227,9 +212,9 @@ def _render_station_card(
         timing_cols[3].metric("Received", timing["received"])
         st.caption(
             f"Generated: {timing['generated']} | Received: {timing['received']} | "
-            f"Fusion window: {FUSION_WINDOW_SEC:.0f}s"
+            f"Fusion window: {FUSION_WINDOW_SEC:.0f}s | Event age at snapshot: {timing['event_age']}"
         )
-        if is_event_stale_for_fusion(event, FUSION_WINDOW_SEC):
+        if is_event_stale_for_fusion(event, FUSION_WINDOW_SEC, now=snapshot_time):
             st.warning("Latest station event is stale for fusion")
         if demo_phase:
             st.caption(f"Demo phase: {demo_phase}")
@@ -270,8 +255,8 @@ def _render_station_card(
             station_id,
             server_url,
             event,
-            simulation_station=_is_simulation_station(event, health),
-            poll_ttl_sec=10.0 if live_mode else 5.0,
+            simulation_station=is_simulation_station(event, health),
+            poll_ttl_sec=10.0,
         )
 
         detail_cols = st.columns(4)
@@ -354,64 +339,76 @@ def _draw_track_card(track: dict):
 
 st.set_page_config(page_title="SkyEar Operator Dashboard", layout="wide")
 st.title("SkyEar Operator Dashboard")
-st.caption("Passive acoustic warning network - tactical overview.")
+st.caption("Passive acoustic warning network - snapshot/admin/debug dashboard.")
 
 server_url = st.sidebar.text_input("Server URL", value=_query_param("server_url", "http://127.0.0.1:8080"))
 live_tactical_url = _live_url(server_url)
 st.sidebar.link_button("Open Live Tactical Map", live_tactical_url)
 st.sidebar.caption(live_tactical_url)
-refresh_mode = st.sidebar.selectbox("Refresh mode", list(REFRESH_MODES), index=list(REFRESH_MODES).index("Manual"))
-refresh_cfg = REFRESH_MODES[refresh_mode]
-live_mode = bool(refresh_cfg["live"])
-if live_mode:
-    st.sidebar.info("For smooth tactical map updates use the /live page. Streamlit still reruns the dashboard script.")
-manual_refresh = st.sidebar.button("Refresh")
-if manual_refresh:
-    for cache_key in list(st.session_state):
-        if str(cache_key).startswith(("dashboard_state::", "recording_state::")):
-            del st.session_state[cache_key]
+link_cols = st.sidebar.columns(2)
+link_cols[0].link_button("Schematic", f"{live_tactical_url}?mode=schematic")
+link_cols[1].link_button("Geo map", f"{live_tactical_url}?mode=geo")
+st.sidebar.info("Use Live Tactical Map for continuous live tracking. This dashboard renders manual snapshots.")
+st.sidebar.caption(f"Refresh mode: {DEFAULT_REFRESH_MODE} Snapshot")
+manual_refresh = st.sidebar.button("Refresh snapshot", type="primary")
+
+with st.sidebar.expander("Advanced refresh/debug", expanded=False):
+    st.caption("Debug auto-refresh reruns Streamlit. Use /live for smooth tactical monitoring.")
+    debug_auto_refresh = st.checkbox("Enable dashboard debug auto-refresh", value=False)
+    debug_interval_label = st.selectbox(
+        "Debug interval",
+        list(DEBUG_REFRESH_INTERVALS_SEC),
+        index=list(DEBUG_REFRESH_INTERVALS_SEC).index("10s"),
+    )
+
 show_inline_mini_spectrum = st.sidebar.checkbox("Show inline mini spectrum", value=False)
-show_bearing_sectors = st.sidebar.checkbox("Show bearing sectors", value=not live_mode)
+show_bearing_sectors = st.sidebar.checkbox("Show bearing sectors", value=False)
 show_global_uncertainty = st.sidebar.checkbox("Show global uncertainty estimate", value=False)
 show_track_estimates = st.sidebar.checkbox("Show track estimates", value=True)
 show_station_coverage = st.sidebar.checkbox("Show station coverage", value=False)
-show_full_station_cards = st.sidebar.checkbox("Show full station cards", value=not live_mode)
+show_full_station_cards = st.sidebar.checkbox("Show all full station cards", value=False)
 max_stations_per_row = int(
     st.sidebar.number_input("Max stations per row", min_value=1, max_value=4, value=3, step=1)
 )
 
 dashboard_state: dict = {}
-live_state: dict = {}
 data_error: Exception | None = None
 try:
-    if live_mode:
-        live_state = _get_json(server_url, "/dashboard/live", timeout=1.2)
-        try:
-            dashboard_state = _cached_dashboard_state(
-                server_url,
-                ttl_sec=float(refresh_cfg["state_ttl_sec"]),
-                timeout=2.5,
-            )
-        except Exception:
-            dashboard_state = {}
-    else:
-        dashboard_state = _cached_dashboard_state(
+    if should_fetch_dashboard_snapshot(
+        st.session_state,
+        server_url,
+        refresh_requested=bool(manual_refresh or debug_auto_refresh),
+    ):
+        store_dashboard_snapshot(
+            st.session_state,
             server_url,
-            ttl_sec=0.0 if manual_refresh else float(refresh_cfg["state_ttl_sec"]),
-            timeout=2.5,
+            _get_json(server_url, "/dashboard/state", timeout=2.5),
+            loaded_unix=time.time(),
         )
-    health_payload = dashboard_state.get("health") or {"ok": bool(live_state)}
-    st.sidebar.success(health_payload)
 except Exception as e:
     data_error = e
     st.sidebar.error(f"Server unavailable: {e}")
 
-fusion = (live_state.get("fusion") if live_mode else dashboard_state.get("fusion")) or {}
-map_state = (live_state.get("map_state") if live_mode else dashboard_state.get("map_state")) or {}
+snapshot_record = get_dashboard_snapshot(st.session_state, server_url)
+snapshot_loaded_unix = None
+if snapshot_record:
+    dashboard_state = snapshot_record.get("payload") or {}
+    snapshot_loaded_unix = snapshot_record.get("loaded_unix")
+    health_payload = dashboard_state.get("health") or {"ok": False}
+    st.sidebar.success(health_payload)
+    age = snapshot_age_sec(st.session_state, server_url)
+    loaded_text = datetime.fromtimestamp(float(snapshot_loaded_unix)).strftime("%Y-%m-%d %H:%M:%S") if snapshot_loaded_unix else "n/a"
+    st.sidebar.caption(f"Snapshot loaded at {loaded_text}")
+    st.sidebar.caption(f"Snapshot age: {age:.1f}s" if age is not None else "Snapshot age: n/a")
+else:
+    st.sidebar.warning("No dashboard snapshot loaded yet.")
+
+snapshot_server_time = dashboard_state.get("server_time") or snapshot_loaded_unix
+fusion = dashboard_state.get("fusion") or {}
+map_state = dashboard_state.get("map_state") or {}
 latest_by_station = dashboard_state.get("stations_latest") or {}
 health_by_station = dashboard_state.get("stations_health") or {}
 alerts = dashboard_state.get("alerts") or []
-station_health_summary = live_state.get("stations_health_summary") or []
 
 fusion_panel = st.container()
 map_panel = st.container()
@@ -457,7 +454,6 @@ with fusion_panel:
         st.error(f"Could not load fusion: {e}")
 
 with map_panel:
-    st.subheader("Map / Passive Acoustic Situation")
     try:
         render_passive_map(
             st,
@@ -473,25 +469,44 @@ with map_panel:
 with stations_panel:
     st.subheader("Stations")
     try:
-        if live_mode and not show_full_station_cards:
-            if station_health_summary:
-                st.dataframe(pd.DataFrame(station_health_summary), width="stretch")
-            else:
-                st.info("Station summary will refresh on the slower dashboard state cache.")
-            st.caption("Live mode keeps station cards collapsed for speed. Enable full station cards in the sidebar when needed.")
-        else:
-            if live_mode:
-                st.caption("Station cards use a slower cache in Live mode to keep map/fusion responsive.")
         station_events = sorted(latest_by_station.items())
         heartbeat_only = sorted(
             (station_id, health)
             for station_id, health in health_by_station.items()
             if station_id not in latest_by_station
         )
-        if not station_events and not (live_mode and not show_full_station_cards):
+        compact_rows = compact_station_rows(latest_by_station, health_by_station)
+        if compact_rows:
+            st.dataframe(pd.DataFrame(compact_rows), width="stretch")
+        elif not station_events:
             st.info("No station events yet.")
 
-        if not (live_mode and not show_full_station_cards):
+        station_ids = sorted(set(latest_by_station) | set(health_by_station))
+        selected_station = st.selectbox("Full station details", ["Select station"] + station_ids)
+        if selected_station != "Select station":
+            selected_event = latest_by_station.get(selected_station)
+            selected_health = health_by_station.get(selected_station)
+            if selected_event:
+                _render_station_card(
+                    selected_station,
+                    selected_event,
+                    selected_health,
+                    fusion_level,
+                    show_inline_mini_spectrum,
+                    server_url,
+                    snapshot_time=snapshot_server_time,
+                )
+            else:
+                with st.container(border=True):
+                    st.markdown(f"### {selected_station}")
+                    _draw_health_badge(selected_health)
+                    timing = timing_summary(None, selected_health, now=snapshot_server_time)
+                    st.metric("Last heartbeat", timing["heartbeat_age"])
+                    st.metric("Latency", timing["latency"])
+                    st.caption("Station is online/background; no acoustic event received yet.")
+
+        if show_full_station_cards:
+            st.warning("Rendering every full station card can be slow on large simulations.")
             for start in range(0, len(station_events), max_stations_per_row):
                 row_events = station_events[start : start + max_stations_per_row]
                 columns = st.columns(len(row_events))
@@ -504,7 +519,7 @@ with stations_panel:
                             fusion_level,
                             show_inline_mini_spectrum,
                             server_url,
-                            live_mode=live_mode,
+                            snapshot_time=snapshot_server_time,
                         )
             st.subheader("Online stations without recent events")
             if heartbeat_only:
@@ -516,14 +531,15 @@ with stations_panel:
                             with st.container(border=True):
                                 st.markdown(f"### {station_id}")
                                 _draw_health_badge(health)
-                                timing = timing_summary(None, health)
+                                timing = timing_summary(None, health, now=snapshot_server_time)
                                 st.metric("Last heartbeat", timing["heartbeat_age"])
                                 st.metric("Latency", timing["latency"])
                                 st.caption("Station is online/background; no acoustic event received yet.")
             else:
                 st.info("No heartbeat-only stations.")
+
+        with st.expander("Map bearing cues", expanded=False):
             bearing_rows = bearing_ray_rows([event for _, event in station_events])
-            st.subheader("Map bearing cues")
             if bearing_rows:
                 st.dataframe(pd.DataFrame(bearing_rows), width="stretch")
             else:
@@ -543,9 +559,9 @@ with alerts_panel:
     except Exception as e:
         st.error(f"Could not load alerts: {e}")
 
-if data_error is None:
+if data_error is None and debug_auto_refresh:
     _schedule_autorefresh(
-        refresh_mode != "Manual",
-        float(refresh_cfg["interval_sec"]),
-        key=f"dashboard_autorefresh_{refresh_mode}",
+        True,
+        float(DEBUG_REFRESH_INTERVALS_SEC[debug_interval_label]),
+        key=f"dashboard_debug_autorefresh_{debug_interval_label}",
     )

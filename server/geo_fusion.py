@@ -168,6 +168,22 @@ def map_tracks_from_events(events: list[Any], max_age_sec: float = 10.0) -> list
     return map_tracks_from_tracks(fuse_tracks(events, window_sec=max_age_sec).tracks)
 
 
+def control_point_from_items(events: list[Any], heartbeats: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in reversed(events):
+        metadata = getattr(item, "metadata", None) or {}
+        lat = metadata.get("control_latitude")
+        lon = metadata.get("control_longitude")
+        if lat is not None and lon is not None:
+            return {"latitude": float(lat), "longitude": float(lon), "source": metadata.get("source") or "event"}
+    for heartbeat in reversed(heartbeats):
+        metadata = (heartbeat.get("metadata") or {}) if isinstance(heartbeat, dict) else {}
+        lat = metadata.get("control_latitude")
+        lon = metadata.get("control_longitude")
+        if lat is not None and lon is not None:
+            return {"latitude": float(lat), "longitude": float(lon), "source": metadata.get("source") or "heartbeat"}
+    return None
+
+
 def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float = 10.0) -> dict[str, Any]:
     now = time.time() if now is None else float(now)
     health = db.station_health(now=now)
@@ -243,6 +259,7 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
             }
         )
     events = db.recent_events(limit=200)
+    heartbeat_items = [heartbeat.model_dump(mode="json") for heartbeat in db.latest_heartbeats_by_station().values()]
     tracks = fuse_tracks(events, window_sec=fusion_window_sec).tracks
     geo_estimate_suppressed_reason = "multiple_tracks" if len(tracks) > 1 else None
     global_geo_estimates = (
@@ -256,6 +273,7 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
         "geo_estimate_suppressed_reason": geo_estimate_suppressed_reason,
         "track_geo_estimates": geo_estimates_from_tracks(tracks, max_age_sec=fusion_window_sec, now=now),
         "tracks": map_tracks_from_tracks(tracks),
+        "control_point": control_point_from_items(events, heartbeat_items),
     }
 
 

@@ -141,6 +141,15 @@ server:
   url: http://127.0.0.1:8080/events
   send_interval_sec: 0.5
 
+live_map:
+  mode: schematic
+  tile_url: null
+  attribution: null
+  default_latitude: null
+  default_longitude: null
+  default_zoom: 13
+  allow_online_tiles: false
+
 heartbeat:
   enabled: true
   interval_sec: 5.0

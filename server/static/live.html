@@ -29,17 +29,50 @@
               <strong id="trackCount">0</strong>
             </div>
             <div>
+              <span>Stations</span>
+              <strong id="stationCount">-</strong>
+            </div>
+            <div>
+              <span>Degraded/offline</span>
+              <strong id="degradedCount">-</strong>
+            </div>
+            <div>
+              <span>Nearest ETA</span>
+              <strong id="nearestEta">-</strong>
+            </div>
+            <div>
+              <span>Latest line</span>
+              <strong id="latestLine">-</strong>
+            </div>
+            <div>
               <span>Age</span>
               <strong id="updateAge">-</strong>
             </div>
           </div>
+          <div class="source-row">sources <strong id="sourceIds">-</strong></div>
           <p id="fusionInterpretation">Waiting for server data...</p>
         </section>
 
         <section class="controls">
+          <label>Map mode
+            <select id="mapMode">
+              <option value="schematic">Schematic</option>
+              <option value="geo">Geo map</option>
+            </select>
+          </label>
+          <label>Center
+            <select id="centerMode">
+              <option value="auto">Auto-fit</option>
+              <option value="control">Control point</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
           <label><input id="toggleSectors" type="checkbox" /> Bearing sectors</label>
           <label><input id="toggleTrackEstimates" type="checkbox" checked /> Track estimates</label>
+          <label><input id="toggleCoverage" type="checkbox" /> Station coverage</label>
           <label><input id="toggleFollow" type="checkbox" checked /> Auto-fit until manual pan</label>
+          <label><input id="toggleFollowTrack" type="checkbox" checked /> Follow selected track</label>
+          <label><input id="togglePause" type="checkbox" /> Pause updates</label>
         </section>
 
         <section>
@@ -59,10 +92,13 @@
       </aside>
 
       <section class="map-wrap">
+        <div id="tileLayer" class="tile-layer" aria-hidden="true"></div>
+        <div id="mapWarning" class="map-warning" hidden></div>
         <svg id="liveMap" viewBox="0 0 1000 1000" role="img" aria-label="SkyEar live tactical map">
           <rect class="map-bg" x="0" y="0" width="1000" height="1000"></rect>
           <g id="worldLayer">
             <g id="coverageLayer"></g>
+            <g id="lineLayer"></g>
             <g id="sectorLayer"></g>
             <g id="trackEstimateLayer"></g>
             <g id="stationLayer"></g>
@@ -70,8 +106,10 @@
           </g>
         </svg>
         <div class="map-help">Drag to pan. Wheel to zoom. Data updates in-place every 500 ms.</div>
+        <div id="mapAttribution" class="map-attribution"></div>
       </section>
     </main>
+    <script src="/static/live_map.js"></script>
     <script src="/static/live.js"></script>
   </body>
 </html>

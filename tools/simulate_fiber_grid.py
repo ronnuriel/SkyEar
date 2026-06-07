@@ -189,6 +189,8 @@ def build_fiber_event(
     timestamp: float,
     elapsed_sec: float,
     step_index: int,
+    control_latitude: float | None = None,
+    control_longitude: float | None = None,
     bearing_noise_deg: float = 2.0,
 ) -> AcousticEvent:
     true_bearing = _bearing_deg(station.latitude, station.longitude, target_latitude, target_longitude)
@@ -205,6 +207,8 @@ def build_fiber_event(
         **station.metadata(),
         "source": "simulate_fiber_grid",
         "scenario_id": SCENARIO_ID,
+        "control_latitude": control_latitude,
+        "control_longitude": control_longitude,
         "simulated_source_id": target.source_id,
         "true_source_latitude": float(target_latitude),
         "true_source_longitude": float(target_longitude),
@@ -292,12 +296,21 @@ def build_fiber_event(
     )
 
 
-def build_fiber_heartbeat(station: FiberStation, *, timestamp: float, failed: bool = False) -> StationHeartbeat:
+def build_fiber_heartbeat(
+    station: FiberStation,
+    *,
+    timestamp: float,
+    failed: bool = False,
+    control_latitude: float | None = None,
+    control_longitude: float | None = None,
+) -> StationHeartbeat:
     status = "error" if failed else "online"
     metadata = {
         **station.metadata(),
         "source": "simulate_fiber_grid",
         "scenario_id": SCENARIO_ID,
+        "control_latitude": control_latitude,
+        "control_longitude": control_longitude,
         "fiber_connected": not failed,
         "station_power_state": "offline" if failed else "online",
         "simulated_station_failure": bool(failed),
@@ -372,7 +385,15 @@ def simulate_fiber_grid(
         elapsed_sec = step_index * float(step_sec)
         timestamp = base_time + elapsed_sec
         for station in stations:
-            heartbeats.append(build_fiber_heartbeat(station, timestamp=timestamp, failed=station.station_id in failed))
+            heartbeats.append(
+                build_fiber_heartbeat(
+                    station,
+                    timestamp=timestamp,
+                    failed=station.station_id in failed,
+                    control_latitude=control_lat,
+                    control_longitude=control_lon,
+                )
+            )
         for target in sim_targets:
             point = target_position(
                 control_lat=control_lat,
@@ -408,6 +429,8 @@ def simulate_fiber_grid(
                     timestamp=timestamp,
                     elapsed_sec=elapsed_sec,
                     step_index=step_index,
+                    control_latitude=control_lat,
+                    control_longitude=control_lon,
                     bearing_noise_deg=bearing_noise_deg,
                 )
                 events.append(event)

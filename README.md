@@ -41,6 +41,14 @@ skyear station
 skyear dashboard
 ```
 
+Smooth tactical live map:
+
+```bash
+skyear live
+```
+
+The Streamlit dashboard is a manual admin/debug snapshot. Use `/live` for continuous track movement, ETA, line crossing, and map monitoring.
+
 Optional local station monitor:
 
 ```bash
@@ -103,6 +111,35 @@ skyear release tag v0.2.0-field-alpha --push
 ```
 
 The older `skyear-*` commands still work for backward compatibility.
+
+## Live Tactical Map
+
+`/live` has two map modes:
+
+- `schematic`: fast offline SVG map, default when no basemap is configured.
+- `geo`: real geographic map using configured OpenStreetMap-compatible raster tiles.
+
+Open explicitly:
+
+```text
+http://127.0.0.1:8080/live?mode=schematic
+http://127.0.0.1:8080/live?mode=geo&lat=<LAT>&lon=<LON>&zoom=13
+```
+
+Run a fiber-grid simulation at an operator-chosen control point:
+
+```bash
+skyear-simulate-fiber-grid \
+  --control-lat <LAT> \
+  --control-lon <LON> \
+  --target-heading-deg 180 \
+  --targets 2 \
+  --post-realtime \
+  --step-sec 0.5 \
+  --assert-tracks
+```
+
+Geo basemaps are opt-in. Configure local/offline tiles with `live_map.tile_url`, or set `live_map.allow_online_tiles: true` to allow online OSM tiles.
 
 ## Documentation
 

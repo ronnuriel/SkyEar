@@ -16,6 +16,7 @@ def normalize_map_state(payload: dict[str, Any] | None) -> dict[str, Any]:
         "geo_estimate_suppressed_reason": payload.get("geo_estimate_suppressed_reason"),
         "track_geo_estimates": payload.get("track_geo_estimates") or [],
         "tracks": payload.get("tracks") or [],
+        "control_point": payload.get("control_point"),
     }
 
 
