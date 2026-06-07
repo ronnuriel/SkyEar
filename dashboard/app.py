@@ -265,6 +265,10 @@ refresh_sec = st.sidebar.number_input(
     step=0.5,
 )
 show_inline_mini_spectrum = st.sidebar.checkbox("Show inline mini spectrum", value=False)
+show_bearing_sectors = st.sidebar.checkbox("Show bearing sectors", value=True)
+show_global_uncertainty = st.sidebar.checkbox("Show global uncertainty estimate", value=False)
+show_track_estimates = st.sidebar.checkbox("Show track estimates", value=True)
+show_station_coverage = st.sidebar.checkbox("Show station coverage", value=False)
 max_stations_per_row = int(
     st.sidebar.number_input("Max stations per row", min_value=1, max_value=4, value=3, step=1)
 )
@@ -322,7 +326,14 @@ with map_panel:
     st.subheader("Map / Passive Acoustic Situation")
     try:
         map_state = requests.get(f"{server_url}/map/state", timeout=2).json()
-        render_passive_map(st, map_state)
+        render_passive_map(
+            st,
+            map_state,
+            show_bearing_sectors=show_bearing_sectors,
+            show_global_estimates=show_global_uncertainty,
+            show_track_estimates=show_track_estimates,
+            show_station_coverage=show_station_coverage,
+        )
     except Exception as e:
         st.info(f"Map / Passive Acoustic Situation unavailable: {e}")
 

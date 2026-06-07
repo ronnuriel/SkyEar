@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import time
 
-from dashboard.map_view import normalize_map_state, stations_missing_location
+from dashboard.map_view import estimate_rows, normalize_map_state, stations_missing_location, track_estimate_rows
 from server.api import get_map_state, ingest_event
 from server.database import db
 from server.geo import (
@@ -258,6 +258,7 @@ def test_dashboard_map_state_parser_handles_missing_optional_fields():
 
     assert stations_missing_location(state)[0]["station_id"] == "a"
     assert state["bearing_cues"] == []
+    assert state["track_geo_estimates"] == []
 
 
 def test_map_state_exposes_multi_target_tracks():
@@ -272,6 +273,48 @@ def test_map_state_exposes_multi_target_tracks():
     assert ("sim_A1", "sim_A2") in station_sets
     assert ("sim_A2", "sim_A3", "sim_A4") in station_sets
     assert all("track_id" in track for track in state["tracks"])
+
+
+def test_map_estimate_rows_cap_display_radius_and_keep_raw_radius():
+    rows = estimate_rows(
+        {
+            "geo_estimates": [
+                {
+                    "latitude": 32.0,
+                    "longitude": 34.0,
+                    "radius_m": 1200.0,
+                    "confidence": 0.2,
+                    "bearing_geometry_quality": "poor",
+                }
+            ]
+        }
+    )
+
+    assert rows[0]["raw_radius_m"] == 1200.0
+    assert rows[0]["display_radius_m"] == 350.0
+    assert rows[0]["fill_color"][0] == 140
+
+
+def test_track_estimate_rows_use_track_labels_and_confidence_color():
+    rows = track_estimate_rows(
+        {
+            "track_geo_estimates": [
+                {
+                    "track_id": "track_A",
+                    "latitude": 32.0,
+                    "longitude": 34.0,
+                    "radius_m": 260.0,
+                    "confidence": 0.72,
+                    "level": 2,
+                    "bearing_geometry_quality": "good",
+                }
+            ]
+        }
+    )
+
+    assert rows[0]["label"] == "track_A"
+    assert rows[0]["display_radius_m"] == 260.0
+    assert rows[0]["fill_color"][0] == 220
 
 
 def test_simulated_geo_events_create_map_estimate():

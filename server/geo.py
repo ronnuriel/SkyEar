@@ -252,6 +252,8 @@ def latest_candidate_bearings(events: list[Any], max_age_sec: float = 10.0, now:
                 "bearing_reject_reason": reject_reason,
                 "bearing_quality": quality,
                 "bearing_used_for_geo": True,
+                "coverage_radius_m": metadata.get("coverage_radius_m"),
+                "metadata": metadata,
             }
         )
     return bearings

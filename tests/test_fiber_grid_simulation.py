@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from server.database import InMemoryDatabase
+from server.geo import haversine_distance_m
 from server.geo_fusion import map_state_from_db
 from server.track_fusion import fuse_tracks
 from tools.simulate_fiber_grid import (
@@ -100,3 +101,44 @@ def test_fiber_grid_map_state_includes_tracks():
     assert state["tracks"][0]["source_ids"] == ["T1"]
     assert state["tracks"][0]["target_eta_sec"] is not None
     assert state["tracks"][0]["latest_line_crossed"] in {"A", "B", "C"}
+    assert state["track_geo_estimates"]
+    assert state["track_geo_estimates"][0]["track_id"] == state["tracks"][0]["track_id"]
+
+
+def test_multi_target_map_state_suppresses_global_geo_estimate():
+    simulation = simulate_fiber_grid(steps=40, targets=2, target_separation_m=300.0, base_time=time.time())
+    db = InMemoryDatabase()
+    for event in simulation.events:
+        db.add_event(event)
+
+    state = map_state_from_db(db, now=time.time(), fusion_window_sec=120.0)
+
+    assert len(state["tracks"]) == 2
+    assert state["geo_estimates"] == []
+    assert state["geo_estimate_suppressed_reason"] == "multiple_tracks"
+    assert len(state["track_geo_estimates"]) == 2
+    assert {tuple(estimate["source_ids"]) for estimate in state["track_geo_estimates"]} == {("T1",), ("T2",)}
+
+
+def test_fiber_grid_bearing_sectors_use_station_coverage_radius():
+    simulation = simulate_fiber_grid(steps=1, targets=1, hearing_radius_m=350.0, base_time=time.time())
+    db = InMemoryDatabase()
+    for event in simulation.events:
+        db.add_event(event)
+
+    state = map_state_from_db(db, now=time.time(), fusion_window_sec=120.0)
+    cue = state["bearing_cues"][0]
+    station = next(item for item in state["stations"] if item["station_id"] == cue["station_id"])
+    polygon = cue["sector_polygon"]
+    farthest = max(
+        haversine_distance_m(
+            float(station["latitude"]),
+            float(station["longitude"]),
+            float(point["latitude"]),
+            float(point["longitude"]),
+        )
+        for point in polygon
+    )
+
+    assert cue["coverage_radius_m"] == 350.0
+    assert farthest <= 360.0

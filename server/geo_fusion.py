@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 import time
 from typing import Any
 
 from server.geo import bearing_sector_polygon, estimate_from_recent_bearings, latest_candidate_bearings
 from server.track_fusion import fuse_tracks
+from shared.event_schema import TrackObservation, TrackSummary
 
 
 def geo_estimates_from_events(events: list[Any], max_age_sec: float = 10.0, now: float | None = None) -> list[dict[str, Any]]:
@@ -28,31 +30,102 @@ def bearing_cues_from_events(events: list[Any], max_age_sec: float = 10.0, now: 
                 "bearing_quality": item.get("bearing_quality"),
                 "bearing_reject_reason": item.get("bearing_reject_reason"),
                 "bearing_used_for_geo": item.get("bearing_used_for_geo"),
+                "coverage_radius_m": item.get("coverage_radius_m"),
                 "sector_polygon": bearing_sector_polygon(
                     item["latitude"],
                     item["longitude"],
                     item["bearing_deg"],
                     item["uncertainty_deg"],
                     25.0,
-                    800.0,
+                    float(item.get("coverage_radius_m") or 350.0),
                 ),
             }
         )
     return cues
 
 
-def map_tracks_from_events(events: list[Any], max_age_sec: float = 10.0) -> list[dict[str, Any]]:
-    tracks = fuse_tracks(events, window_sec=max_age_sec).tracks
+def _track_source_ids(track: TrackSummary) -> list[str]:
+    return sorted(
+        {
+            str(observation.source_hint_id or (observation.metadata or {}).get("simulated_source_id"))
+            for observation in track.observations
+            if observation.source_hint_id is not None or (observation.metadata or {}).get("simulated_source_id") is not None
+        }
+    )
+
+
+def _observation_as_geo_event(observation: TrackObservation) -> Any | None:
+    event = observation.original_event
+    if event is None:
+        return None
+    metadata = {
+        **dict(event.metadata or {}),
+        **dict(observation.metadata or {}),
+        "operator_label": "local_drone_candidate",
+        "bearing_deg": observation.bearing_deg,
+        "estimated_azimuth_deg": observation.bearing_deg,
+        "bearing_uncertainty_deg": observation.bearing_error_deg
+        or (observation.metadata or {}).get("bearing_uncertainty_deg")
+        or getattr(event, "bearing_uncertainty_deg", None)
+        or 25.0,
+        "bearing_reliable": True,
+        "bearing_used_for_geo": True,
+    }
+    return SimpleNamespace(
+        station_id=observation.station_id,
+        station_location=event.station_location,
+        station_latitude=event.station_latitude,
+        station_longitude=event.station_longitude,
+        station_altitude_m=event.station_altitude_m,
+        timestamp_unix=observation.event_timestamp_unix,
+        server_received_unix=observation.server_received_unix,
+        operator_label="local_drone_candidate",
+        estimated_azimuth_deg=observation.bearing_deg,
+        tracked_bearing_deg=observation.bearing_deg,
+        raw_bearing_deg=observation.bearing_deg,
+        bearing_uncertainty_deg=metadata["bearing_uncertainty_deg"],
+        bearing_reliable=True,
+        bearing_quality=metadata.get("bearing_quality") or getattr(event, "bearing_quality", None),
+        bearing_used_for_geo=True,
+        beam_confidence_pct=observation.confidence,
+        metadata=metadata,
+    )
+
+
+def geo_estimates_from_tracks(
+    tracks: list[TrackSummary],
+    *,
+    max_age_sec: float = 10.0,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    estimates: list[dict[str, Any]] = []
+    for track in tracks:
+        geo_events = [
+            item
+            for item in (_observation_as_geo_event(observation) for observation in track.observations)
+            if item is not None and item.estimated_azimuth_deg is not None
+        ]
+        estimate = estimate_from_recent_bearings(geo_events, max_age_sec=max_age_sec, now=now)
+        if estimate.get("estimate_type") == "none":
+            continue
+        estimates.append(
+            {
+                **estimate,
+                "track_id": track.track_id,
+                "source_ids": _track_source_ids(track),
+                "level": track.level,
+                "track_confidence": track.confidence,
+                "observation_count": len(track.observations),
+            }
+        )
+    return estimates
+
+
+def map_tracks_from_tracks(tracks: list[TrackSummary]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for track in tracks:
         source = track.estimated_source or {}
-        source_ids = sorted(
-            {
-                str(observation.source_hint_id or (observation.metadata or {}).get("simulated_source_id"))
-                for observation in track.observations
-                if observation.source_hint_id is not None or (observation.metadata or {}).get("simulated_source_id") is not None
-            }
-        )
+        source_ids = _track_source_ids(track)
         eta_values = [
             float((observation.metadata or {})["target_eta_sec"])
             for observation in track.observations
@@ -89,6 +162,10 @@ def map_tracks_from_events(events: list[Any], max_age_sec: float = 10.0) -> list
             }
         )
     return rows
+
+
+def map_tracks_from_events(events: list[Any], max_age_sec: float = 10.0) -> list[dict[str, Any]]:
+    return map_tracks_from_tracks(fuse_tracks(events, window_sec=max_age_sec).tracks)
 
 
 def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float = 10.0) -> dict[str, Any]:
@@ -139,6 +216,7 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
                 "line_distance_m": event_meta.get("line_distance_m") or (heartbeat.get("metadata") or {}).get("line_distance_m"),
                 "fiber_node_id": event_meta.get("fiber_node_id") or (heartbeat.get("metadata") or {}).get("fiber_node_id"),
                 "fiber_connected": event_meta.get("fiber_connected") or (heartbeat.get("metadata") or {}).get("fiber_connected"),
+                "coverage_radius_m": event_meta.get("coverage_radius_m") or (heartbeat.get("metadata") or {}).get("coverage_radius_m"),
                 "last_seen_sec_ago": last_seen_sec_ago,
                 "health": health_label,
                 "health_source": health_source,
@@ -165,12 +243,19 @@ def map_state_from_db(db, *, now: float | None = None, fusion_window_sec: float 
             }
         )
     events = db.recent_events(limit=200)
+    tracks = fuse_tracks(events, window_sec=fusion_window_sec).tracks
+    geo_estimate_suppressed_reason = "multiple_tracks" if len(tracks) > 1 else None
+    global_geo_estimates = (
+        [] if geo_estimate_suppressed_reason else geo_estimates_from_events(events, max_age_sec=fusion_window_sec, now=now)
+    )
     return {
         "server_time": now,
         "stations": stations,
         "bearing_cues": bearing_cues_from_events(events, max_age_sec=fusion_window_sec, now=now),
-        "geo_estimates": geo_estimates_from_events(events, max_age_sec=fusion_window_sec, now=now),
-        "tracks": map_tracks_from_events(events, max_age_sec=fusion_window_sec),
+        "geo_estimates": global_geo_estimates,
+        "geo_estimate_suppressed_reason": geo_estimate_suppressed_reason,
+        "track_geo_estimates": geo_estimates_from_tracks(tracks, max_age_sec=fusion_window_sec, now=now),
+        "tracks": map_tracks_from_tracks(tracks),
     }
 
 

@@ -126,7 +126,7 @@ def _bearing_lines_plausibly_intersect(left: TrackObservation, right: TrackObser
     right_to_left = _bearing_deg(right, left)
     if left_bearing is None or right_bearing is None or left_to_right is None or right_to_left is None:
         return False
-    return _angle_delta_deg(left_bearing, left_to_right) <= 35.0 and _angle_delta_deg(right_bearing, right_to_left) <= 35.0
+    return _angle_delta_deg(left_bearing, left_to_right) <= 60.0 and _angle_delta_deg(right_bearing, right_to_left) <= 60.0
 
 
 def _same_sector_or_group(left: TrackObservation, right: TrackObservation) -> bool:
@@ -154,6 +154,9 @@ def _same_track(left: TrackObservation, right: TrackObservation) -> bool:
     distance = _station_distance_m(left, right)
     if left_radius is not None and right_radius is not None and distance is not None:
         return distance <= left_radius + right_radius or _bearing_lines_plausibly_intersect(left, right)
+
+    if _bearing_lines_plausibly_intersect(left, right):
+        return True
 
     return _same_sector_or_group(left, right)
 

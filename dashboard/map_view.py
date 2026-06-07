@@ -13,6 +13,8 @@ def normalize_map_state(payload: dict[str, Any] | None) -> dict[str, Any]:
         "stations": payload.get("stations") or [],
         "bearing_cues": payload.get("bearing_cues") or [],
         "geo_estimates": payload.get("geo_estimates") or [],
+        "geo_estimate_suppressed_reason": payload.get("geo_estimate_suppressed_reason"),
+        "track_geo_estimates": payload.get("track_geo_estimates") or [],
         "tracks": payload.get("tracks") or [],
     }
 
@@ -112,13 +114,45 @@ def estimate_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
     rows = []
     for estimate in normalize_map_state(map_state)["geo_estimates"]:
         if estimate.get("latitude") is not None and estimate.get("longitude") is not None:
+            raw_radius = float(estimate.get("radius_m") or 100.0)
             rows.append(
                 {
                     **estimate,
                     "lat": float(estimate["latitude"]),
                     "lon": float(estimate["longitude"]),
+                    "raw_radius_m": raw_radius,
+                    "display_radius_m": min(raw_radius, 350.0),
+                    "fill_color": _estimate_color(
+                        float(estimate.get("confidence") or 0.0),
+                        str(estimate.get("bearing_geometry_quality") or ""),
+                    ),
                 }
             )
+    return rows
+
+
+def track_estimate_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for estimate in normalize_map_state(map_state)["track_geo_estimates"]:
+        if estimate.get("latitude") is None or estimate.get("longitude") is None:
+            continue
+        raw_radius = float(estimate.get("radius_m") or 100.0)
+        confidence = float(estimate.get("confidence") or estimate.get("track_confidence") or 0.0)
+        rows.append(
+            {
+                **estimate,
+                "lat": float(estimate["latitude"]),
+                "lon": float(estimate["longitude"]),
+                "raw_radius_m": raw_radius,
+                "display_radius_m": min(raw_radius, 350.0),
+                "label": str(estimate.get("track_id") or "track"),
+                "fill_color": _estimate_color(
+                    confidence,
+                    str(estimate.get("bearing_geometry_quality") or ""),
+                    level=int(estimate.get("level") or 0),
+                ),
+            }
+        )
     return rows
 
 
@@ -165,7 +199,42 @@ def _track_color(level: int) -> list[int]:
     return [75, 130, 210, 190]
 
 
-def render_passive_map(st, map_state: dict[str, Any]) -> None:
+def _estimate_color(confidence: float, geometry_quality: str = "", *, level: int | None = None) -> list[int]:
+    confidence = float(confidence)
+    geometry_quality = str(geometry_quality or "").lower()
+    if confidence >= 0.65 and (level or 0) >= 2 and geometry_quality != "poor":
+        return [220, 45, 35, 95]
+    if confidence >= 0.45 and geometry_quality != "poor":
+        return [245, 175, 45, 80]
+    return [140, 140, 140, 65]
+
+
+def coverage_rows(map_state: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for station in station_marker_rows(map_state):
+        radius = station.get("coverage_radius_m")
+        if radius is None:
+            continue
+        rows.append(
+            {
+                **station,
+                "display_radius_m": min(float(radius), 500.0),
+                "raw_radius_m": float(radius),
+                "fill_color": [60, 130, 210, 24],
+            }
+        )
+    return rows
+
+
+def render_passive_map(
+    st,
+    map_state: dict[str, Any],
+    *,
+    show_bearing_sectors: bool = True,
+    show_global_estimates: bool = False,
+    show_track_estimates: bool = True,
+    show_station_coverage: bool = False,
+) -> None:
     st.subheader("Map / Passive Acoustic Situation")
     st.caption("Map estimates are approximate acoustic cues and not targeting-grade.")
     state = normalize_map_state(map_state)
@@ -175,9 +244,13 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
         st.dataframe(pd.DataFrame(missing), width="stretch")
 
     markers = station_marker_rows(state)
-    sectors = sector_polygon_rows(state)
-    estimates = estimate_rows(state)
+    sectors = sector_polygon_rows(state) if show_bearing_sectors else []
+    estimates = estimate_rows(state) if show_global_estimates else []
+    track_estimates = track_estimate_rows(state) if show_track_estimates else []
+    coverage = coverage_rows(state) if show_station_coverage else []
     tracks = track_rows(state)
+    if state.get("geo_estimate_suppressed_reason") == "multiple_tracks" and show_global_estimates:
+        st.caption("Global uncertainty estimate hidden: multiple tracks are active.")
     if not markers:
         st.info("No station coordinates available for map rendering.")
         return
@@ -189,11 +262,27 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
             st.dataframe(pd.DataFrame(sectors), width="stretch")
         if estimates:
             st.dataframe(pd.DataFrame(estimates), width="stretch")
+        if track_estimates:
+            st.dataframe(pd.DataFrame(track_estimates), width="stretch")
+        if coverage:
+            st.dataframe(pd.DataFrame(coverage), width="stretch")
         if tracks:
             st.dataframe(pd.DataFrame(tracks), width="stretch")
         return
 
-    layers = [
+    layers = []
+    if coverage:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=coverage,
+                get_position="[lon, lat]",
+                get_fill_color="fill_color",
+                get_radius="display_radius_m",
+                pickable=True,
+            )
+        )
+    layers.append(
         pdk.Layer(
             "ScatterplotLayer",
             data=markers,
@@ -202,7 +291,7 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
             get_radius=35,
             pickable=True,
         )
-    ]
+    )
     if sectors:
         layers.append(
             pdk.Layer(
@@ -221,8 +310,31 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
                 "ScatterplotLayer",
                 data=estimates,
                 get_position="[lon, lat]",
-                get_fill_color=[220, 30, 30, 120],
-                get_radius="radius_m || 100",
+                get_fill_color="fill_color",
+                get_radius="display_radius_m",
+                pickable=True,
+            )
+        )
+    if track_estimates:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=track_estimates,
+                get_position="[lon, lat]",
+                get_fill_color="fill_color",
+                get_radius="display_radius_m",
+                pickable=True,
+            )
+        )
+        layers.append(
+            pdk.Layer(
+                "TextLayer",
+                data=track_estimates,
+                get_position="[lon, lat]",
+                get_text="label",
+                get_color=[20, 20, 20, 220],
+                get_size=13,
+                get_alignment_baseline="'top'",
                 pickable=True,
             )
         )
@@ -255,7 +367,14 @@ def render_passive_map(st, map_state: dict[str, Any]) -> None:
             layers=layers,
             initial_view_state=pdk.ViewState(latitude=center["lat"], longitude=center["lon"], zoom=13),
             tooltip={
-                "text": "{station_id}\n{health}\n{last_status}\nML {ml_drone_pct}\nCombined {combined_drone_evidence_pct}\nBearing {bearing_deg}"
+                "text": (
+                    "{station_id}{track_id}\n"
+                    "{health}{interpretation}\n"
+                    "status {last_status}\n"
+                    "ML {ml_drone_pct} Combined {combined_drone_evidence_pct}\n"
+                    "Bearing {bearing_deg}\n"
+                    "radius {display_radius_m} raw {raw_radius_m}"
+                )
             },
         )
     )
